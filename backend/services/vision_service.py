@@ -87,6 +87,17 @@ async def analyze_frame(frame_path: str) -> str:
         resp.raise_for_status()
         data = resp.json()
 
+        # 记录 token 用量
+        usage = data.get("usage", {})
+        from backend.services.cost_service import log_usage
+        log_usage(
+            model=DASHSCOPE_VL_MODEL,
+            provider="DashScope",
+            call_type="vision",
+            input_tokens=usage.get("input_tokens", 0),
+            output_tokens=usage.get("output_tokens", 0),
+        )
+
         description = data["output"]["choices"][0]["message"]["content"]
         # 清理base64前缀（API有时会返回）
         if isinstance(description, list):

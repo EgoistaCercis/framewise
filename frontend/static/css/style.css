@@ -76,6 +76,19 @@ body {
     color: var(--text-secondary);
 }
 
+.cost-display {
+    font-size: 13px;
+    font-weight: 600;
+    background: var(--surface2);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    padding: 6px 14px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.cost-display:hover { background: var(--accent); color: #0f0f1a; }
+
 /* ── 按钮 ── */
 .btn {
     padding: 10px 20px;

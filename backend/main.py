@@ -53,6 +53,38 @@ async def health():
     return {"status": "ok", "version": "0.1.0"}
 
 
+# ═══════════════════════════════════════════
+# 用量统计 API
+# ═══════════════════════════════════════════
+
+@app.get("/api/usage/today")
+async def usage_today():
+    """今日用量统计"""
+    from backend.services.cost_service import get_today_stats
+    return get_today_stats()
+
+
+@app.get("/api/usage/total")
+async def usage_total():
+    """总用量统计"""
+    from backend.services.cost_service import get_total_stats
+    return get_total_stats()
+
+
+@app.get("/api/usage/by_model")
+async def usage_by_model():
+    """按模型分组统计"""
+    from backend.services.cost_service import get_stats_by_model
+    return get_stats_by_model()
+
+
+@app.get("/api/usage/history")
+async def usage_history(limit: int = 30):
+    """最近调用记录"""
+    from backend.services.cost_service import get_history
+    return get_history(limit)
+
+
 @app.post("/api/videos/upload")
 async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     """上传视频文件，启动后台ASR处理"""
@@ -126,6 +158,7 @@ async def ask_question(video_id: str, req: AskRequest):
     result = await answer_text_question(
         video_hash=state["video_hash"],
         question=req.question,
+        video_id=video_id,
     )
 
     return {
@@ -182,6 +215,7 @@ async def ask_with_frame(video_id: str, req: AskFrameRequest):
         video_hash=state["video_hash"],
         question=req.question,
         frame_description=frame_result["description"],
+        video_id=video_id,
     )
 
     return {

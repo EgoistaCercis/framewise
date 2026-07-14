@@ -33,6 +33,7 @@ async def answer_text_question(
     video_hash: str,
     question: str,
     top_k: int = None,
+    video_id: str = None,
 ) -> dict:
     """
     文本问答：检索 + LLM生成
@@ -69,7 +70,7 @@ async def answer_text_question(
 
 请根据以上字幕内容回答用户问题。"""
 
-    answer = await _call_deepseek(user_prompt)
+    answer = await _call_deepseek(user_prompt, video_id=video_id)
 
     # Step 6: 构建引用
     references = []
@@ -93,6 +94,7 @@ async def answer_with_frame_context(
     question: str,
     frame_description: str,
     top_k: int = None,
+    video_id: str = None,
 ) -> dict:
     """
     结合画面描述的问答
@@ -128,7 +130,7 @@ async def answer_with_frame_context(
 
 请结合以上字幕内容和画面信息，综合回答用户问题。"""
 
-    answer = await _call_deepseek(user_prompt)
+    answer = await _call_deepseek(user_prompt, video_id=video_id)
 
     references = []
     for r in results:
@@ -147,8 +149,10 @@ async def answer_with_frame_context(
     }
 
 
-async def _call_deepseek(user_prompt: str) -> str:
-    """调用 DeepSeek API"""
+async def _call_deepseek(user_prompt: str, video_id: str = None) -> str:
+    """调用 DeepSeek API，并记录 token 用量"""
+    from backend.services.cost_service import log_usage
+
     url = f"{DEEPSEEK_BASE_URL}/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
@@ -169,5 +173,17 @@ async def _call_deepseek(user_prompt: str) -> str:
         resp.raise_for_status()
         data = resp.json()
         answer = data["choices"][0]["message"]["content"]
+
+        # 记录用量
+        usage = data.get("usage", {})
+        log_usage(
+            model=DEEPSEEK_MODEL,
+            provider="DeepSeek",
+            call_type="chat",
+            input_tokens=usage.get("prompt_tokens", 0),
+            output_tokens=usage.get("completion_tokens", 0),
+            video_id=video_id,
+        )
+
         logger.debug(f"DeepSeek answer: {answer[:100]}...")
         return answer

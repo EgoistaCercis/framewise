@@ -288,4 +288,51 @@
     function hideProcessing() {
         processingOverlay.style.display = "none";
     }
+
+    // ── 费用统计 ──
+    const costDisplay = document.getElementById("costDisplay");
+
+    async function refreshCost() {
+        try {
+            const resp = await fetch("/api/usage/today");
+            const data = await resp.json();
+            costDisplay.textContent = `💰 ¥${data.total_cost.toFixed(4)}`;
+            costDisplay.title = `今日调用: ${data.calls}次\n输入: ${data.total_input_tokens} tokens\n输出: ${data.total_output_tokens} tokens`;
+        } catch (e) {
+            // 静默处理
+        }
+    }
+
+    // 点击显示详情
+    costDisplay.addEventListener("click", async () => {
+        try {
+            const [todayResp, totalResp, modelResp] = await Promise.all([
+                fetch("/api/usage/today").then(r => r.json()),
+                fetch("/api/usage/total").then(r => r.json()),
+                fetch("/api/usage/by_model").then(r => r.json()),
+            ]);
+
+            let msg = `📊 **今日用量**\n`;
+            msg += `调用: ${todayResp.calls}次 | `;
+            msg += `输入: ${(todayResp.total_input_tokens/1000).toFixed(1)}K | `;
+            msg += `输出: ${(todayResp.total_output_tokens/1000).toFixed(1)}K\n`;
+            msg += `费用: **¥${todayResp.total_cost.toFixed(4)}**\n\n`;
+
+            msg += `📈 **累计**\n`;
+            msg += `调用: ${totalResp.calls}次 | 费用: ¥${totalResp.total_cost.toFixed(4)}\n\n`;
+
+            msg += `🔧 **按模型**\n`;
+            for (const m of modelResp) {
+                msg += `${m.provider}/${m.model}: ${m.calls}次, ¥${m.total_cost.toFixed(4)}\n`;
+            }
+
+            addMessage("system", msg.replace(/\n/g, "<br>").replace(/\*\*(.+?)\*\*/g, "<b>$1</b>"));
+        } catch (e) {
+            addMessage("error", "获取费用统计失败");
+        }
+    });
+
+    // 页面加载后获取费用，并定时刷新
+    refreshCost();
+    setInterval(refreshCost, 30000);  // 每30秒刷新
 })();

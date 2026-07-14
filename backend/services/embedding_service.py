@@ -53,6 +53,19 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
                 batch_embeddings = [item["embedding"] for item in batch_results]
                 all_embeddings.extend(batch_embeddings)
 
+                # 记录 token 用量
+                usage = data.get("usage", {})
+                total_tokens = usage.get("total_tokens", 0)
+                if total_tokens:
+                    from backend.services.cost_service import log_usage
+                    log_usage(
+                        model=SILICONFLOW_EMBEDDING_MODEL,
+                        provider="SiliconFlow",
+                        call_type="embedding",
+                        input_tokens=total_tokens,
+                        output_tokens=0,
+                    )
+
                 logger.debug(f"Embedded batch {i // batch_size + 1}: {len(batch)} texts")
             except Exception as e:
                 logger.error(f"Embedding API error for batch {i // batch_size + 1}: {e}")
