@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>帧知 - 视频学习Agent</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- 顶部栏 -->
+    <header class="topbar">
+        <div class="logo">
+            <span class="logo-icon">🎬</span>
+            <h1>帧知</h1>
+            <span class="logo-sub">视频学习Agent</span>
+        </div>
+        <div class="upload-area">
+            <input type="file" id="videoFile" accept="video/*" hidden>
+            <button id="uploadBtn" class="btn btn-primary" onclick="document.getElementById('videoFile').click()">
+                📤 上传视频
+            </button>
+            <span id="uploadStatus" class="status-text"></span>
+        </div>
+    </header>
+
+    <!-- 主体区域 -->
+    <main class="main-container">
+        <!-- 左侧：视频播放器 -->
+        <section class="video-panel" id="videoPanel">
+            <div id="videoPlaceholder" class="video-placeholder">
+                <div class="placeholder-content">
+                    <span class="placeholder-icon">🎥</span>
+                    <p>上传一个视频开始学习</p>
+                    <p class="placeholder-hint">支持 MP4、MKV、AVI 等格式</p>
+                </div>
+            </div>
+            <div id="videoContainer" class="video-container" style="display:none">
+                <video id="videoPlayer" controls>
+                    你的浏览器不支持视频播放
+                </video>
+                <div id="subtitlesOverlay" class="subtitles-overlay"></div>
+            </div>
+            <div id="processingOverlay" class="processing-overlay" style="display:none">
+                <div class="spinner"></div>
+                <p>正在分析视频...</p>
+                <p class="processing-detail" id="processingDetail">语音识别中，请稍候</p>
+            </div>
+        </section>
+
+        <!-- 右侧：聊天面板 -->
+        <section class="chat-panel">
+            <div class="chat-header">
+                <h3>💬 对话</h3>
+                <span id="videoName" class="video-name"></span>
+            </div>
+            <div class="chat-messages" id="chatMessages">
+                <div class="message system-msg">
+                    <p>👋 欢迎使用帧知！上传视频后，你可以：</p>
+                    <ul>
+                        <li>提问视频中的知识点</li>
+                        <li>点击时间戳快速跳转</li>
+                        <li>暂停时分析当前画面</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="chat-input-area">
+                <div class="input-row">
+                    <button id="modeToggle" class="btn btn-mode" title="切换提问模式">
+                        📝 文本提问
+                    </button>
+                </div>
+                <div class="input-row">
+                    <input type="text" id="questionInput"
+                           placeholder="输入你的问题..."
+                           disabled
+                           autocomplete="off">
+                    <button id="sendBtn" class="btn btn-send" disabled>发送</button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
