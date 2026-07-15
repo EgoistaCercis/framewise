@@ -171,6 +171,10 @@
             '-webkit-background-clip:text;-webkit-text-fill-color:transparent;">' +
             '🎬 帧知</span>' +
             '<span id="fw-status" style="flex:1;margin-left:10px;font-size:12px;color:#999;"></span>' +
+            '<button id="fw-auto" title="自动处理新视频" style="background:#2a2a55;border:1px solid #6c5ce7;' +
+            'color:#e0e0f0;font-size:14px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:4px;">🤖</button>' +
+            '<button id="fw-process" title="手动处理当前视频" style="background:#252540;border:1px solid #2a2a45;' +
+            'color:#999;font-size:14px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:4px;">🔄</button>' +
             '<button id="fw-minimize" title="缩小" style="background:none;border:none;color:#999;' +
             'font-size:20px;cursor:pointer;padding:2px 8px;line-height:1;">−</button>' +
             '<button id="fw-close" title="关闭" style="background:none;border:none;color:#999;' +
@@ -220,12 +224,41 @@
 
     var isVisionMode = false;
 
+    var autoMode = true;  // 默认自动处理
+    var lastUrl = location.href;
+
     function bindEvents() {
         var closeBtn = document.getElementById("fw-close");
         if (closeBtn) closeBtn.onclick = hidePanel;
 
         var minBtn = document.getElementById("fw-minimize");
         if (minBtn) minBtn.onclick = minimizePanel;
+
+        var autoBtn = document.getElementById("fw-auto");
+        if (autoBtn) autoBtn.onclick = function () {
+            autoMode = !autoMode;
+            autoBtn.style.background = autoMode ? "#2a2a55" : "#252540";
+            autoBtn.style.borderColor = autoMode ? "#6c5ce7" : "#2a2a45";
+            autoBtn.style.color = autoMode ? "#e0e0f0" : "#999";
+            autoBtn.title = autoMode ? "自动处理：开" : "自动处理：关";
+        };
+
+        var procBtn = document.getElementById("fw-process");
+        if (procBtn) procBtn.onclick = function () {
+            if (videoId && window._fwReady) {
+                addMsg("system", "✅ 当前视频已处理");
+                return;
+            }
+            procBtn.disabled = true;
+            procBtn.style.opacity = "0.5";
+            videoId = null;
+            window._fwReady = false;
+            updateStatus("⏳ 手动处理中...");
+            var inp = document.getElementById("fw-input");
+            if (inp) { inp.disabled = true; inp.value = ""; }
+            document.getElementById("fw-send").disabled = true;
+            initVideo();  // pollStatus 中会自动恢复按钮状态
+        };
 
         var sendBtn = document.getElementById("fw-send");
         if (sendBtn) sendBtn.onclick = sendQuestion;
@@ -244,8 +277,31 @@
             };
         }
 
-        // 时间更新 + 自动检测暂停状态
+        // 时间更新 + 自动检测暂停状态 + URL变化检测
         setInterval(updateTime, 1000);
+        setInterval(checkUrlChange, 2000);
+    }
+
+    // ── URL 变化检测（合集/列表自动跳转） ──
+    function checkUrlChange() {
+        if (location.href !== lastUrl) {
+            console.log("[帧知] URL changed:", lastUrl, "→", location.href);
+            lastUrl = location.href;
+            if (autoMode) {
+                videoId = null;
+                window._fwReady = false;
+                updateStatus("⏳ 检测到新视频...");
+                var inp = document.getElementById("fw-input");
+                if (inp) { inp.disabled = true; }
+                document.getElementById("fw-send").disabled = true;
+                // 清理旧消息
+                var msgs = document.getElementById("fw-messages");
+                if (msgs) msgs.innerHTML = '<div style="background:#252540;color:#999;padding:10px 14px;border-radius:8px;font-size:13px;">🔄 检测到新视频，自动处理中...</div>';
+                initVideo();
+            } else {
+                addMsg("system", "🔔 检测到新视频，点击 🔄 按钮手动处理");
+            }
+        }
     }
 
     // ═══════════════════════════════════════════
@@ -355,8 +411,10 @@
                     updateStatus("✅ 就绪 (" + data.chunk_count + " 片段)");
                     var inp = document.getElementById("fw-input");
                     var snd = document.getElementById("fw-send");
+                    var proc = document.getElementById("fw-process");
                     if (inp) { inp.disabled = false; inp.focus(); }
                     if (snd) snd.disabled = false;
+                    if (proc) { proc.disabled = false; proc.style.opacity = "1"; }
                     addMsg("system", "✅ 视频已索引，开始提问吧！");
                     return;
                 }
