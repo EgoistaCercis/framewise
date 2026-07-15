@@ -67,6 +67,26 @@ async def health():
 # 用量统计 API
 # ═══════════════════════════════════════════
 
+@app.post("/api/videos/{video_id}/quiz")
+async def generate_quiz_endpoint(video_id: str, req: dict):
+    """主动学习：根据当前视频位置生成考题"""
+    from backend.services.rag_service import generate_quiz
+
+    state = video_states.get(video_id)
+    if not state:
+        raise HTTPException(404, "视频不存在")
+    if state["status"] != "ready":
+        raise HTTPException(400, "视频尚未处理完成")
+
+    timestamp = req.get("timestamp", 0)
+    result = await generate_quiz(
+        video_hash=state["video_hash"],
+        timestamp=timestamp,
+        video_id=video_id,
+    )
+    return result
+
+
 @app.get("/api/usage/today")
 async def usage_today():
     """今日用量统计"""

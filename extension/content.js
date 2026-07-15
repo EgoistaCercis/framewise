@@ -175,6 +175,8 @@
             'color:#e0e0f0;font-size:14px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:4px;">🤖</button>' +
             '<button id="fw-process" title="手动处理当前视频" style="background:#252540;border:1px solid #2a2a45;' +
             'color:#999;font-size:14px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:4px;">🔄</button>' +
+            '<button id="fw-quiz" title="考考我" style="background:#252540;border:1px solid #2a2a45;' +
+            'color:#999;font-size:14px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:4px;">❓</button>' +
             '<button id="fw-minimize" title="缩小" style="background:none;border:none;color:#999;' +
             'font-size:20px;cursor:pointer;padding:2px 8px;line-height:1;">−</button>' +
             '<button id="fw-close" title="关闭" style="background:none;border:none;color:#999;' +
@@ -258,6 +260,40 @@
             if (inp) { inp.disabled = true; inp.value = ""; }
             document.getElementById("fw-send").disabled = true;
             initVideo();  // pollStatus 中会自动恢复按钮状态
+        };
+
+        var quizBtn = document.getElementById("fw-quiz");
+        if (quizBtn) quizBtn.onclick = function () {
+            if (!window._fwReady) {
+                addMsg("system", "⏳ 视频还在处理中...");
+                return;
+            }
+            quizBtn.disabled = true;
+            quizBtn.style.opacity = "0.5";
+            addMsg("system", "🤔 正在出题...");
+            var t = getCurrentTime();
+            fetch(API_BASE + "/api/videos/" + videoId + "/quiz", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ timestamp: t }),
+            }).then(function (r) { return r.json(); }).then(function (data) {
+                var html = '<b>📝 视频 ' + data.context_time + ' 处小测验：</b><br><br>';
+                data.questions.forEach(function (q, i) {
+                    html += '<div style="margin-bottom:10px;"><b>' + (i + 1) + '. ' + esc(q.question) + '</b>';
+                    html += '<div style="margin-top:4px;cursor:pointer;color:#00d2a0;font-size:12px;" ' +
+                            'onclick="var a=this.nextElementSibling;a.style.display=a.style.display==\'block\'?\'none\':\'block\';">' +
+                            '💡 点击查看答案</div>';
+                    html += '<div style="display:none;background:#1a1a2e;padding:8px 12px;border-radius:6px;' +
+                            'margin-top:4px;font-size:13px;border-left:3px solid #00d2a0;">' +
+                            esc(q.answer) + '</div></div>';
+                });
+                addMsg("assistant", html);
+            }).catch(function (e) {
+                addMsg("error", "出题失败: " + e.message);
+            }).finally(function () {
+                quizBtn.disabled = false;
+                quizBtn.style.opacity = "1";
+            });
         };
 
         var sendBtn = document.getElementById("fw-send");
