@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from backend.config import (
@@ -25,6 +26,14 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("帧知")
 
 app = FastAPI(title="帧知 - 视频学习Agent", version="0.1.0")
+
+# CORS — 允许浏览器插件跨域请求
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ── 内存状态管理 (MVP阶段，后续可改Redis) ──
 video_states: dict = {}  # video_id → {status, video_path, video_hash, subtitles, ...}
@@ -85,6 +94,53 @@ async def usage_history(limit: int = 30):
     return get_history(limit)
 
 
+@app.post("/api/videos/from_url")
+async def process_url(background_tasks: BackgroundTasks, req: dict):
+    """
+    从视频链接创建知识索引（仅下载音频，不存视频）
+    Body: {url: "https://..."}
+    """
+    from backend.services.url_service import get_video_info, download_audio
+
+    url = req.get("url", "").strip()
+    if not url:
+        raise HTTPException(400, "请提供视频链接")
+
+    # 生成唯一ID
+    video_id = uuid.uuid4().hex[:12]
+
+    # 获取视频信息
+    try:
+        info = get_video_info(url)
+    except Exception as e:
+        raise HTTPException(400, f"无法获取视频信息: {str(e)}")
+
+    # 初始化状态
+    video_states[video_id] = {
+        "status": "processing",
+        "video_path": None,  # URL模式没有本地视频
+        "video_hash": None,
+        "original_name": info["title"],
+        "subtitles": None,
+        "chunks": None,
+        "url": url,
+        "embed_url": info.get("embed_url", url),
+        "duration": info.get("duration", 0),
+        "is_url_mode": True,
+    }
+
+    # 后台处理：下载音频 → ASR → Chunk → Embedding
+    background_tasks.add_task(_process_url_task, video_id, url)
+
+    logger.info(f"URL video processing: {video_id} ({info['title']})")
+    return {
+        "video_id": video_id,
+        "status": "processing",
+        "title": info["title"],
+        "duration": info["duration"],
+    }
+
+
 @app.post("/api/videos/upload")
 async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     """上传视频文件，启动后台ASR处理"""
@@ -126,6 +182,9 @@ async def get_video_info(video_id: str):
         "status": state["status"],
         "original_name": state["original_name"],
         "chunk_count": len(state.get("chunks", [])) if state.get("chunks") else 0,
+        "is_url_mode": state.get("is_url_mode", False),
+        "embed_url": state.get("embed_url", None),
+        "duration": state.get("duration", 0),
     }
 
 
@@ -173,19 +232,24 @@ async def ask_question(video_id: str, req: AskRequest):
 @app.get("/api/videos/{video_id}/frame")
 async def get_frame(video_id: str, t: float):
     """获取视频指定时间戳的帧图片"""
-    from backend.services.vision_service import extract_frame
-
     state = video_states.get(video_id)
     if not state:
         raise HTTPException(404, "视频不存在")
     if state["status"] != "ready":
         raise HTTPException(400, "视频尚未处理完成")
 
-    frame_path = await extract_frame(
-        video_path=state["video_path"],
-        timestamp=t,
-        video_hash=state["video_hash"],
-    )
+    if state.get("is_url_mode"):
+        # URL模式：从远程下载帧
+        from backend.services.url_service import download_frame_at_time
+        frame_path = download_frame_at_time(state["url"], t, video_id)
+    else:
+        # 本地模式：从本地视频截图
+        from backend.services.vision_service import extract_frame
+        frame_path = await extract_frame(
+            video_path=state["video_path"],
+            timestamp=t,
+            video_hash=state["video_hash"],
+        )
 
     return FileResponse(frame_path, media_type="image/jpeg")
 
@@ -234,6 +298,10 @@ async def serve_video(video_id: str):
     state = video_states.get(video_id)
     if not state:
         raise HTTPException(404, "视频不存在")
+
+    if state.get("is_url_mode"):
+        # URL模式：返回嵌入URL，前端用iframe播放
+        return {"is_url_mode": True, "embed_url": state.get("embed_url", state["url"])}
 
     return FileResponse(
         state["video_path"],
@@ -292,6 +360,61 @@ async def _process_video_task(video_id: str):
         state["status"] = "error"
         state["error"] = str(e)
         logger.error(f"[{video_id}] Processing failed: {e}", exc_info=True)
+
+
+async def _process_url_task(video_id: str, url: str):
+    """后台处理URL视频：下载音频 → ASR → Chunk → Embedding"""
+    from backend.services.url_service import download_audio, cleanup_audio
+    from backend.services.cache_service import get_video_hash, save_subtitle_cache, subtitle_cache_exists, load_subtitle_cache
+    from backend.services.asr_service import transcribe
+    from backend.services.chunk_service import chunk_subtitles
+    from backend.services.embedding_service import embed_texts
+    from backend.services.vector_store import build_index
+
+    state = video_states.get(video_id)
+    if not state:
+        return
+
+    audio_path = None
+    try:
+        # 1. 下载音频
+        logger.info(f"[{video_id}] Downloading audio from URL...")
+        audio_path = download_audio(url, video_id)
+
+        # 2. 计算音频Hash（用作缓存key）
+        video_hash = get_video_hash(audio_path)
+        state["video_hash"] = video_hash
+
+        # 3. 检查字幕缓存
+        if subtitle_cache_exists(video_hash):
+            logger.info(f"[{video_id}] Subtitle cache hit")
+            subtitles = load_subtitle_cache(video_hash)
+        else:
+            logger.info(f"[{video_id}] Starting ASR...")
+            subtitles = transcribe(audio_path)
+            save_subtitle_cache(video_hash, subtitles)
+
+        state["subtitles"] = subtitles
+        logger.info(f"[{video_id}] ASR done: {len(subtitles)} segments")
+
+        # 4. Chunk + Embedding + FAISS
+        chunks = chunk_subtitles(subtitles, video_id)
+        state["chunks"] = chunks
+
+        chunk_texts = [c["text"] for c in chunks]
+        embeddings = await embed_texts(chunk_texts)
+        build_index(chunks, embeddings, video_hash)
+
+        state["status"] = "ready"
+        logger.info(f"[{video_id}] URL processing complete! Ready for Q&A.")
+
+    except Exception as e:
+        state["status"] = "error"
+        state["error"] = str(e)
+        logger.error(f"[{video_id}] URL processing failed: {e}", exc_info=True)
+    finally:
+        if audio_path and os.path.exists(audio_path):
+            cleanup_audio(video_id)
 
 
 # ═══════════════════════════════════════════

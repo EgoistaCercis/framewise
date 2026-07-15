@@ -112,6 +112,30 @@ body {
 }
 .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
 
+.btn-secondary {
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    font-size: 12px;
+    padding: 8px 14px;
+}
+.btn-secondary:hover:not(:disabled) { border-color: var(--primary); }
+
+.url-input {
+    width: 280px;
+    padding: 8px 14px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.2s;
+}
+.url-input:focus { border-color: var(--primary); }
+.url-input::placeholder { color: #555; }
+
 .btn-send {
     background: var(--accent);
     color: #0f0f1a;

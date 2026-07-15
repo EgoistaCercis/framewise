@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "帧知 - 视频学习助手",
+  "version": "0.1.0",
+  "description": "在B站/YouTube学习视频时，随时向AI提问，获得带时间戳的精准回答",
+  "permissions": [],
+  "host_permissions": [
+    "https://www.bilibili.com/*",
+    "https://www.youtube.com/*",
+    "http://localhost:8000/*",
+    "http://127.0.0.1:8000/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.bilibili.com/video/*",
+        "https://www.bilibili.com/bangumi/*",
+        "https://www.youtube.com/watch*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"]
+    }
+  ],
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

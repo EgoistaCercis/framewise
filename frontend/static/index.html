@@ -19,8 +19,11 @@
             <span id="costDisplay" class="cost-display" title="今日API费用">
                 💰 ¥0.0000
             </span>
-            <button id="uploadBtn" class="btn btn-primary" onclick="document.getElementById('videoFile').click()">
-                📤 上传视频
+            <input type="text" id="urlInput" class="url-input"
+                   placeholder="或粘贴视频链接 (B站/YouTube等)">
+            <button id="urlBtn" class="btn btn-primary">🔗 解析</button>
+            <button id="uploadBtn" class="btn btn-secondary" onclick="document.getElementById('videoFile').click()">
+                📤 上传
             </button>
             <span id="uploadStatus" class="status-text"></span>
         </div>

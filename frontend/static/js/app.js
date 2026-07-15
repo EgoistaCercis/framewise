@@ -19,12 +19,14 @@
     const modeToggle = document.getElementById("modeToggle");
     const videoName = document.getElementById("videoName");
     const subtitlesOverlay = document.getElementById("subtitlesOverlay");
+    const urlInput = document.getElementById("urlInput");
+    const urlBtn = document.getElementById("urlBtn");
 
-    // ── 状态 ──
     let currentVideoId = null;
     let currentSubtitles = [];
     let isVisionMode = false;
     let isPolling = false;
+    let isUrlMode = false;  // URL模式 vs 本地文件模式
 
     // ── 上传 ──
     videoFile.addEventListener("change", async (e) => {
@@ -58,11 +60,16 @@
 
             const data = await resp.json();
             currentVideoId = data.video_id;
+            isUrlMode = false;
             videoName.textContent = file.name;
 
-            // 显示视频播放器
-            videoPlayer.src = `/api/videos/${currentVideoId}/file`;
-            videoPlayer.load();
+            // 恢复本地视频播放器
+            videoContainer.innerHTML = '';
+            const videoEl = document.createElement("video");
+            videoEl.id = "videoPlayer";
+            videoEl.controls = true;
+            videoEl.style.cssText = "max-width:100%;max-height:100%;outline:none;";
+            videoEl.src = `/api/videos/${currentVideoId}/file`;
             videoPlaceholder.style.display = "none";
             videoContainer.style.display = "flex";
 
@@ -75,6 +82,94 @@
             uploadStatus.textContent = "";
             hideProcessing();
         }
+    }
+
+    // ── URL 解析 ──
+    urlBtn.addEventListener("click", () => processUrl());
+    urlInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") processUrl();
+    });
+
+    async function processUrl() {
+        const url = urlInput.value.trim();
+        if (!url) return;
+
+        urlBtn.disabled = true;
+        uploadBtn.disabled = true;
+        urlInput.disabled = true;
+        uploadStatus.textContent = "解析中...";
+        showProcessing("获取视频信息...", "正在获取视频元数据");
+
+        try {
+            const resp = await fetch("/api/videos/from_url", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ url: url }),
+            });
+
+            if (!resp.ok) {
+                const err = await resp.json();
+                throw new Error(err.detail || "解析失败");
+            }
+
+            const data = await resp.json();
+            currentVideoId = data.video_id;
+            isUrlMode = true;
+            videoName.textContent = data.title || url;
+
+            // 显示嵌入播放器
+            showUrlPlayer(currentVideoId);
+
+            // 开始轮询处理状态
+            pollProcessingStatus();
+
+        } catch (err) {
+            addMessage("error", `❌ 解析失败：${err.message}`);
+            urlBtn.disabled = false;
+            uploadBtn.disabled = false;
+            urlInput.disabled = false;
+            uploadStatus.textContent = "";
+            hideProcessing();
+        }
+    }
+
+    function showUrlPlayer(videoId) {
+        videoPlaceholder.style.display = "none";
+        videoContainer.style.display = "flex";
+
+        // 先隐藏视频标签，等拿到 embed_url 再显示
+        videoPlayer.style.display = "none";
+        videoContainer.innerHTML = '';
+
+        // 创建 iframe 容器
+        const iframeDiv = document.createElement("div");
+        iframeDiv.id = "iframeContainer";
+        iframeDiv.style.cssText = "width:100%;height:100%;";
+
+        // 先显示处理中
+        iframeDiv.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:#999;">加载播放器中...</div>';
+        videoContainer.appendChild(iframeDiv);
+
+        // 获取 embed_url
+        fetch(`/api/videos/${videoId}`).then(r => r.json()).then(info => {
+            if (info.embed_url) {
+                // 判断是否可嵌入
+                if (info.embed_url.startsWith("//") || info.embed_url.startsWith("http")) {
+                    iframeDiv.innerHTML = `<iframe src="${info.embed_url}"
+                        style="width:100%;height:100%;border:none;"
+                        allow="autoplay; encrypted-media"
+                        allowfullscreen></iframe>`;
+                } else {
+                    iframeDiv.innerHTML = `<div style="padding:40px;text-align:center;color:var(--text-secondary);">
+                        <p>📺 此平台暂不支持嵌入播放</p>
+                        <p style="margin-top:12px;"><a href="${info.embed_url}" target="_blank" style="color:var(--primary);">👉 在新窗口打开视频</a></p>
+                        <p style="margin-top:8px;font-size:12px;">画面提问功能仍可使用，会自动下载对应帧</p>
+                    </div>`;
+                }
+            }
+        }).catch(() => {
+            iframeDiv.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-secondary);">⚠️ 无法加载播放器，但问答功能正常</div>';
+        });
     }
 
     // ── 处理状态轮询 ──
@@ -91,6 +186,8 @@
                 if (data.status === "ready") {
                     hideProcessing();
                     uploadBtn.disabled = false;
+                    urlBtn.disabled = false;
+                    urlInput.disabled = false;
                     uploadStatus.textContent = `✅ 就绪 (${data.chunk_count} 个知识片段)`;
                     questionInput.disabled = false;
                     sendBtn.disabled = false;
@@ -106,6 +203,8 @@
                 if (data.status === "error") {
                     hideProcessing();
                     uploadBtn.disabled = false;
+                    urlBtn.disabled = false;
+                    urlInput.disabled = false;
                     uploadStatus.textContent = "❌ 处理失败";
                     addMessage("error", "❌ 视频处理失败，请重试");
                     isPolling = false;
@@ -136,21 +235,23 @@
     }
 
     // ── 视频字幕同步 ──
-    videoPlayer.addEventListener("timeupdate", () => {
-        if (!currentSubtitles.length) return;
+    if (videoPlayer) {
+        videoPlayer.addEventListener("timeupdate", () => {
+            if (!currentSubtitles.length || isUrlMode) return;
 
-        const currentTime = videoPlayer.currentTime;
-        let currentText = "";
+            const currentTime = isUrlMode ? 0 : (videoPlayer ? videoPlayer.currentTime : 0);
+            let currentText = "";
 
-        for (const seg of currentSubtitles) {
-            if (currentTime >= seg.start && currentTime <= seg.end) {
-                currentText = seg.text;
-                break;
+            for (const seg of currentSubtitles) {
+                if (currentTime >= seg.start && currentTime <= seg.end) {
+                    currentText = seg.text;
+                    break;
+                }
             }
-        }
 
-        subtitlesOverlay.textContent = currentText;
-    });
+            subtitlesOverlay.textContent = currentText;
+        });
+    }
 
     // ── 发送消息 ──
     sendBtn.addEventListener("click", () => sendQuestion());
@@ -174,7 +275,7 @@
         const modeLabel = isVisionMode ? "🖼️ [画面提问]" : "";
         addMessage("user", `${modeLabel} ${question}`);
 
-        const currentTime = videoPlayer.currentTime;
+        const currentTime = isUrlMode ? 0 : (videoPlayer ? videoPlayer.currentTime : 0);
 
         try {
             if (isVisionMode) {
@@ -241,8 +342,12 @@
 
     // ── 时间跳转 ──
     window.seekTo = function (seconds) {
-        videoPlayer.currentTime = seconds;
-        videoPlayer.play();
+        if (isUrlMode) {
+            addMessage("system", `⏱️ 该片段位于视频 ${formatTime(seconds)} 处`);
+        } else if (videoPlayer) {
+            videoPlayer.currentTime = seconds;
+            videoPlayer.play();
+        }
     };
 
     // ── 模式切换 ──

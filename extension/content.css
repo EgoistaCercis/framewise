@@ -1,0 +1,249 @@
+/* ═══════════════════════════════════════
+   帧知 - 浏览器插件样式
+   注入到 B站/YouTube 页面
+   ═══════════════════════════════════════ */
+
+/* ── 触发按钮 ── */
+#fw-trigger {
+    position: fixed;
+    right: 16px;
+    bottom: 120px;
+    width: 48px;
+    height: 48px;
+    background: linear-gradient(135deg, #6c5ce7, #00d2a0);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    cursor: pointer;
+    z-index: 999998;
+    box-shadow: 0 4px 16px rgba(108, 92, 231, 0.5);
+    transition: transform 0.2s, box-shadow 0.2s;
+    user-select: none;
+}
+#fw-trigger:hover {
+    transform: scale(1.1);
+    box-shadow: 0 6px 24px rgba(108, 92, 231, 0.7);
+}
+
+/* ── 遮罩 ── */
+#fw-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.3);
+    z-index: 999999;
+    display: none;
+}
+
+/* ── 侧边面板 ── */
+#fw-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 380px;
+    height: 100vh;
+    background: #1a1a2e;
+    border-left: 1px solid #2a2a45;
+    z-index: 1000000;
+    display: none;
+    flex-direction: column;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    color: #e0e0f0;
+    animation: fw-slide-in 0.25s ease;
+}
+@keyframes fw-slide-in {
+    from { transform: translateX(100%); }
+    to { transform: translateX(0); }
+}
+
+/* ── 头部 ── */
+.fw-header {
+    display: flex;
+    align-items: center;
+    padding: 14px 16px;
+    border-bottom: 1px solid #2a2a45;
+    background: #16162a;
+    flex-shrink: 0;
+}
+.fw-logo {
+    font-size: 16px;
+    font-weight: 700;
+    background: linear-gradient(135deg, #6c5ce7, #00d2a0);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+.fw-status {
+    flex: 1;
+    margin-left: 10px;
+    font-size: 12px;
+    color: #9999bb;
+}
+.fw-close {
+    background: none;
+    border: none;
+    color: #9999bb;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: background 0.2s;
+}
+.fw-close:hover { background: #2a2a45; color: #e0e0f0; }
+
+/* ── 消息区 ── */
+.fw-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.fw-messages::-webkit-scrollbar { width: 5px; }
+.fw-messages::-webkit-scrollbar-thumb { background: #2a2a45; border-radius: 3px; }
+
+.fw-msg {
+    padding: 10px 14px;
+    border-radius: 8px;
+    line-height: 1.6;
+    font-size: 13px;
+    animation: fw-fade-in 0.3s;
+    word-break: break-word;
+}
+@keyframes fw-fade-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.fw-system {
+    background: #252540;
+    color: #9999bb;
+}
+.fw-system .fw-hint { font-size: 11px; margin-top: 4px; }
+
+.fw-user {
+    background: #6c5ce7;
+    color: white;
+    align-self: flex-end;
+    max-width: 85%;
+}
+
+.fw-assistant {
+    background: #252540;
+    border: 1px solid #2a2a45;
+    max-width: 85%;
+}
+
+.fw-error {
+    background: #e74c3c;
+    color: white;
+    font-size: 12px;
+}
+
+.fw-frame-badge {
+    display: inline-block;
+    background: #e17055;
+    color: white;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    margin-bottom: 6px;
+}
+
+.fw-refs {
+    margin-top: 10px;
+    font-size: 12px;
+    color: #9999bb;
+}
+
+.fw-timestamp {
+    display: inline-block;
+    background: #00d2a0;
+    color: #0f0f1a;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    margin: 1px;
+    transition: filter 0.2s;
+    text-decoration: none;
+}
+.fw-timestamp:hover { filter: brightness(1.2); }
+
+/* ── 输入区 ── */
+.fw-input-area {
+    padding: 10px 12px;
+    border-top: 1px solid #2a2a45;
+    background: #16162a;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.fw-mode-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.fw-mode-btn {
+    background: #252540;
+    border: 1px solid #2a2a45;
+    color: #9999bb;
+    padding: 3px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    font-family: inherit;
+    transition: all 0.2s;
+}
+.fw-mode-btn.active {
+    border-color: #6c5ce7;
+    color: #e0e0f0;
+    background: #2a2a55;
+}
+.fw-time {
+    margin-left: auto;
+    font-size: 12px;
+    color: #00d2a0;
+    font-weight: 600;
+    font-family: monospace;
+}
+.fw-send-row {
+    display: flex;
+    gap: 6px;
+}
+#fw-input {
+    flex: 1;
+    padding: 8px 12px;
+    background: #252540;
+    border: 1px solid #2a2a45;
+    border-radius: 6px;
+    color: #e0e0f0;
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.2s;
+}
+#fw-input:focus { border-color: #6c5ce7; }
+#fw-input::placeholder { color: #555; }
+#fw-input:disabled { opacity: 0.5; }
+
+#fw-send {
+    padding: 8px 16px;
+    background: #00d2a0;
+    border: none;
+    border-radius: 6px;
+    color: #0f0f1a;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: filter 0.2s;
+    white-space: nowrap;
+}
+#fw-send:hover:not(:disabled) { filter: brightness(1.1); }
+#fw-send:disabled { opacity: 0.4; cursor: not-allowed; }
