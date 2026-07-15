@@ -28,16 +28,100 @@
             "position:fixed;right:16px;bottom:120px;" +
             "width:48px;height:48px;background:linear-gradient(135deg,#6c5ce7,#00d2a0);" +
             "border-radius:50%;display:flex;align-items:center;justify-content:center;" +
-            "font-size:22px;cursor:pointer;z-index:2147483647;" +
+            "font-size:22px;cursor:grab;z-index:2147483647;" +
             "box-shadow:0 4px 16px rgba(108,92,231,0.5);user-select:none;";
-        trigger.onclick = function () {
-            console.log("[帧知] 按钮被点击");
-            var p = document.getElementById("fw-panel");
-            var o = document.getElementById("fw-overlay");
-            if (p) p.style.display = "flex";
-            if (o) o.style.display = "block";
-            trigger.style.display = "none";
-        };
+        // 拖拽移动（GPU加速 + RAF节流）
+        var dragState = null, dragRaf = null, hasDragged = false;
+        trigger.addEventListener("mousedown", function (e) {
+            if (e.button !== 0) return;
+            var rect = trigger.getBoundingClientRect();
+            dragState = {
+                startX: e.clientX, startY: e.clientY,
+                left: rect.left, top: rect.top,
+            };
+            hasDragged = false;
+            e.preventDefault();
+        });
+        document.addEventListener("mousemove", function (e) {
+            if (!dragState || dragRaf) return;
+            dragRaf = requestAnimationFrame(function () {
+                dragRaf = null;
+                var dx = e.clientX - dragState.startX;
+                var dy = e.clientY - dragState.startY;
+                if (Math.abs(dx) > 3 || Math.abs(dy) > 3) hasDragged = true;
+                if (!hasDragged) return;  // 没拖动就不更新位置
+                var l = Math.max(0, Math.min(window.innerWidth - 48, dragState.left + dx));
+                var t = Math.max(0, Math.min(window.innerHeight - 48, dragState.top + dy));
+                trigger.style.transform = "translate3d(" + l + "px," + t + "px,0)";
+            });
+        });
+        document.addEventListener("mouseup", function () {
+            if (dragState) {
+                if (hasDragged) {
+                    // 提交最终位置
+                    var parts = (trigger.style.transform || "").match(/translate3d\(([^,]+)px,\s*([^,]+)px/);
+                    if (parts) {
+                        trigger.style.left = parts[1] + "px";
+                        trigger.style.top = parts[2] + "px";
+                    }
+                    trigger.style.transform = "";
+                    trigger.style.right = "auto";
+                    trigger.style.bottom = "auto";
+                }
+                // 没拖动 = 点击
+                if (!hasDragged) {
+                    var p = document.getElementById("fw-panel");
+                    if (p) p.style.display = "flex";
+                    trigger.style.display = "none";
+                }
+                dragState = null;
+            }
+        });
+        // 触摸事件
+        trigger.addEventListener("touchstart", function (e) {
+            var rect = trigger.getBoundingClientRect();
+            var t = e.touches[0];
+            dragState = {
+                startX: t.clientX, startY: t.clientY,
+                left: rect.left, top: rect.top,
+            };
+            hasDragged = false;
+        }, { passive: false });
+        document.addEventListener("touchmove", function (e) {
+            if (!dragState || dragRaf) return;
+            var t = e.touches[0];
+            dragRaf = requestAnimationFrame(function () {
+                dragRaf = null;
+                var dx = t.clientX - dragState.startX;
+                var dy = t.clientY - dragState.startY;
+                if (Math.abs(dx) > 3 || Math.abs(dy) > 3) hasDragged = true;
+                if (!hasDragged) return;
+                var l = Math.max(0, Math.min(window.innerWidth - 48, dragState.left + dx));
+                var tp = Math.max(0, Math.min(window.innerHeight - 48, dragState.top + dy));
+                trigger.style.transform = "translate3d(" + l + "px," + tp + "px,0)";
+            });
+        });
+        document.addEventListener("touchend", function () {
+            if (dragState) {
+                if (hasDragged) {
+                    var parts = (trigger.style.transform || "").match(/translate3d\(([^,]+)px,\s*([^,]+)px/);
+                    if (parts) {
+                        trigger.style.left = parts[1] + "px";
+                        trigger.style.top = parts[2] + "px";
+                    }
+                    trigger.style.transform = "";
+                    trigger.style.right = "auto";
+                    trigger.style.bottom = "auto";
+                }
+                if (!hasDragged) {
+                    var p = document.getElementById("fw-panel");
+                    if (p) p.style.display = "flex";
+                    trigger.style.display = "none";
+                }
+                dragState = null;
+            }
+        });
+
         document.body.appendChild(trigger);
         console.log("[帧知] 浮动按钮已创建");
     } catch (e) {
@@ -69,23 +153,14 @@
     // ═══════════════════════════════════════════
 
     function buildPanel() {
-        // 遮罩
-        var overlay = document.createElement("div");
-        overlay.id = "fw-overlay";
-        overlay.style.cssText =
-            "position:fixed;inset:0;background:rgba(0,0,0,0.3);" +
-            "z-index:2147483646;display:none;";
-        overlay.onclick = function (e) {
-            if (e.target === overlay) hidePanel();
-        };
-
         // 面板
         var panel = document.createElement("div");
         panel.id = "fw-panel";
         panel.style.cssText =
             "position:fixed;top:0;right:0;width:380px;height:100vh;" +
             "background:#1a1a2e;border-left:1px solid #2a2a45;" +
-            "z-index:2147483647;display:none;flex-direction:column;" +
+            "z-index:2147483646;display:none;flex-direction:column;" +
+            "box-shadow:-4px 0 24px rgba(0,0,0,0.5);" +
             "font-family:system-ui,'PingFang SC','Microsoft YaHei',sans-serif;" +
             "font-size:14px;color:#e0e0f0;";
         panel.innerHTML =
@@ -96,7 +171,9 @@
             '-webkit-background-clip:text;-webkit-text-fill-color:transparent;">' +
             '🎬 帧知</span>' +
             '<span id="fw-status" style="flex:1;margin-left:10px;font-size:12px;color:#999;"></span>' +
-            '<button id="fw-close" style="background:none;border:none;color:#999;' +
+            '<button id="fw-minimize" title="缩小" style="background:none;border:none;color:#999;' +
+            'font-size:20px;cursor:pointer;padding:2px 8px;line-height:1;">−</button>' +
+            '<button id="fw-close" title="关闭" style="background:none;border:none;color:#999;' +
             'font-size:18px;cursor:pointer;padding:4px 8px;">✕</button>' +
             '</div>' +
             '<div id="fw-messages" style="flex:1;overflow-y:auto;overflow-x:hidden;' +
@@ -123,17 +200,18 @@
             '</div>' +
             '</div>';
 
-        document.body.appendChild(overlay);
         document.body.appendChild(panel);
         console.log("[帧知] 面板已创建");
     }
 
     function hidePanel() {
         var p = document.getElementById("fw-panel");
-        var o = document.getElementById("fw-overlay");
         if (p) p.style.display = "none";
-        if (o) o.style.display = "none";
         if (trigger) trigger.style.display = "flex";
+    }
+
+    function minimizePanel() {
+        hidePanel();
     }
 
     // ═══════════════════════════════════════════
@@ -145,6 +223,9 @@
     function bindEvents() {
         var closeBtn = document.getElementById("fw-close");
         if (closeBtn) closeBtn.onclick = hidePanel;
+
+        var minBtn = document.getElementById("fw-minimize");
+        if (minBtn) minBtn.onclick = minimizePanel;
 
         var sendBtn = document.getElementById("fw-send");
         if (sendBtn) sendBtn.onclick = sendQuestion;
