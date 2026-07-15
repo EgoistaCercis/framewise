@@ -28,3 +28,6 @@ Thumbs.db
 
 # 项目文件
 *.docx
+
+# 原始素材（大文件）
+extension/帧知.png
