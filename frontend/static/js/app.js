@@ -16,7 +16,7 @@
     const chatMessages = document.getElementById("chatMessages");
     const questionInput = document.getElementById("questionInput");
     const sendBtn = document.getElementById("sendBtn");
-    const modeToggle = document.getElementById("modeToggle");
+    const modeLabel = document.getElementById("modeLabel");
     const videoName = document.getElementById("videoName");
     const subtitlesOverlay = document.getElementById("subtitlesOverlay");
     const urlInput = document.getElementById("urlInput");
@@ -262,6 +262,12 @@
         }
     });
 
+    // textarea 自动调高度
+    questionInput.addEventListener("input", () => {
+        questionInput.style.height = "auto";
+        questionInput.style.height = Math.min(questionInput.scrollHeight, 120) + "px";
+    });
+
     async function sendQuestion() {
         const question = questionInput.value.trim();
         if (!question || !currentVideoId) return;
@@ -279,14 +285,15 @@
 
         try {
             if (isVisionMode) {
-                // 画面提问
+                // 画面提问：从 video 元素截图
+                const body = { question, timestamp: currentTime };
+                const frameB64 = captureVideoFrame();
+                if (frameB64) body.frame_base64 = frameB64;
+
                 const resp = await fetch(`/api/videos/${currentVideoId}/ask_frame`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        question: question,
-                        timestamp: currentTime,
-                    }),
+                    body: JSON.stringify(body),
                 });
                 const data = await resp.json();
                 displayAnswer(data, true);
@@ -350,19 +357,20 @@
         }
     };
 
-    // ── 模式切换 ──
-    modeToggle.addEventListener("click", () => {
-        isVisionMode = !isVisionMode;
-        if (isVisionMode) {
-            modeToggle.textContent = "🖼️ 画面提问";
-            modeToggle.classList.add("vision-mode");
-            questionInput.placeholder = "暂停视频后，对当前画面提问...";
-        } else {
-            modeToggle.textContent = "📝 文本提问";
-            modeToggle.classList.remove("vision-mode");
-            questionInput.placeholder = "输入你的问题...";
+    // ── 自动检测画面模式 ──
+    function updateMode() {
+        const videoEl = document.querySelector("#videoContainer video");
+        const paused = videoEl ? videoEl.paused : false;
+        isVisionMode = paused;
+        if (modeLabel) {
+            modeLabel.textContent = paused ? "🖼️ 画面提问" : "📝 提问";
+            modeLabel.classList.toggle("vision-active", paused);
         }
-    });
+        if (questionInput) {
+            questionInput.placeholder = paused ? "视频已暂停，对当前画面提问..." : "输入你的问题...";
+        }
+    }
+    setInterval(updateMode, 1000);
 
     // ── 工具函数 ──
     function addMessage(type, content) {
@@ -392,6 +400,22 @@
 
     function hideProcessing() {
         processingOverlay.style.display = "none";
+    }
+
+    // ── 视频截图 ──
+    function captureVideoFrame() {
+        try {
+            const v = document.querySelector("#videoContainer video");
+            if (!v || v.videoWidth === 0) return null;
+            const canvas = document.createElement("canvas");
+            canvas.width = v.videoWidth;
+            canvas.height = v.videoHeight;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(v, 0, 0);
+            return canvas.toDataURL("image/jpeg", 0.7).replace(/^data:image\/jpeg;base64,/, "");
+        } catch (e) {
+            return null;
+        }
     }
 
     // ── 费用统计 ──

@@ -144,17 +144,14 @@ body {
 }
 .btn-send:hover:not(:disabled) { filter: brightness(1.1); }
 
-.btn-mode {
-    background: var(--surface2);
-    color: var(--text);
+.mode-label {
     font-size: 12px;
-    padding: 6px 14px;
-    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    padding: 4px 0;
 }
-.btn-mode:hover:not(:disabled) { border-color: var(--primary); }
-.btn-mode.vision-mode {
-    border-color: var(--accent);
+.mode-label.vision-active {
     color: var(--accent);
+    font-weight: 600;
 }
 
 /* ── 主体 ── */
@@ -281,6 +278,7 @@ body {
 .chat-messages {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 16px;
     display: flex;
     flex-direction: column;
@@ -296,6 +294,11 @@ body {
     font-size: 14px;
     line-height: 1.6;
     animation: fadeIn 0.3s;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    min-width: 0;
+    max-width: 100%;
 }
 
 @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
@@ -376,6 +379,9 @@ body {
     font-family: inherit;
     outline: none;
     transition: border-color 0.2s;
+    resize: none;
+    max-height: 120px;
+    line-height: 1.4;
 }
 
 #questionInput:focus { border-color: var(--primary); }

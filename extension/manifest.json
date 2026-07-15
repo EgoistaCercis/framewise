@@ -5,20 +5,21 @@
   "description": "在B站/YouTube学习视频时，随时向AI提问，获得带时间戳的精准回答",
   "permissions": [],
   "host_permissions": [
-    "https://www.bilibili.com/*",
-    "https://www.youtube.com/*",
+    "*://*.bilibili.com/*",
+    "*://www.youtube.com/*",
     "http://localhost:8000/*",
     "http://127.0.0.1:8000/*"
   ],
   "content_scripts": [
     {
       "matches": [
-        "https://www.bilibili.com/video/*",
-        "https://www.bilibili.com/bangumi/*",
-        "https://www.youtube.com/watch*"
+        "*://*.bilibili.com/video/*",
+        "*://*.bilibili.com/bangumi/*",
+        "*://*.bilibili.com/list/*",
+        "*://www.youtube.com/watch*"
       ],
       "js": ["content.js"],
-      "css": ["content.css"]
+      "run_at": "document_end"
     }
   ],
   "icons": {

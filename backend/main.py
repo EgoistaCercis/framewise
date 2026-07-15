@@ -50,7 +50,8 @@ class AskRequest(BaseModel):
 
 class AskFrameRequest(BaseModel):
     question: str
-    timestamp: float  # 必须：当前暂停时间戳
+    timestamp: float  # 当前暂停时间戳
+    frame_base64: str | None = None  # 浏览器端截图的base64（优先使用）
 
 
 # ═══════════════════════════════════════════
@@ -257,7 +258,7 @@ async def get_frame(video_id: str, t: float):
 @app.post("/api/videos/{video_id}/ask_frame")
 async def ask_with_frame(video_id: str, req: AskFrameRequest):
     """画面问答：截取当前帧 + 视觉分析 + RAG回答"""
-    from backend.services.vision_service import process_frame_question
+    from backend.services.vision_service import process_frame_question, analyze_frame
     from backend.services.rag_service import answer_with_frame_context
 
     state = video_states.get(video_id)
@@ -267,12 +268,32 @@ async def ask_with_frame(video_id: str, req: AskFrameRequest):
         raise HTTPException(400, f"视频尚未处理完成，当前状态: {state['status']}")
 
     # Step 1: 提取帧 + 视觉分析
-    frame_result = await process_frame_question(
-        video_path=state["video_path"],
-        video_hash=state["video_hash"],
-        timestamp=req.timestamp,
-        question=req.question,
-    )
+    if req.frame_base64:
+        # 浏览器端已截图，直接用base64分析
+        import base64
+        import tempfile
+        frame_data = base64.b64decode(req.frame_base64)
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp.write(frame_data)
+            frame_path = tmp.name
+        description = await analyze_frame(frame_path)
+        frame_result = {"frame_path": frame_path, "description": description}
+        # 清理临时文件
+        os.unlink(frame_path)
+    elif state.get("is_url_mode"):
+        # URL模式服务端截帧
+        from backend.services.url_service import download_frame_at_time
+        frame_path = download_frame_at_time(state["url"], req.timestamp, video_id)
+        description = await analyze_frame(frame_path)
+        frame_result = {"frame_path": frame_path, "description": description}
+    else:
+        # 本地视频服务端截帧
+        frame_result = await process_frame_question(
+            video_path=state["video_path"],
+            video_hash=state["video_hash"],
+            timestamp=req.timestamp,
+            question=req.question,
+        )
 
     # Step 2: 结合RAG回答
     result = await answer_with_frame_context(

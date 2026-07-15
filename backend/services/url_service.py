@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 from backend.config import FFMPEG_PATH, DATA_DIR
+from backend.services.cache_service import frame_cache_path, frame_cache_exists
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,7 @@ def download_audio(url: str, video_id: str) -> str:
 def download_frame_at_time(url: str, timestamp: float, video_id: str) -> str:
     """
     下载视频指定时间点的一帧（不下载整个视频）
+    策略: 用 yt-dlp 获取直链 → ffmpeg 拉流截帧
 
     返回: 帧图片路径
     """
@@ -115,46 +117,46 @@ def download_frame_at_time(url: str, timestamp: float, video_id: str) -> str:
 
     os.makedirs(os.path.dirname(frame_path), exist_ok=True)
 
-    # 用 yt-dlp 下载包含目标时间的视频片段，然后 ffmpeg 截帧
-    audio_dir = AUDIO_DIR
-    tmp_video = os.path.join(audio_dir, f"{video_id}_tmp.mp4")
+    # 方案1: 用 yt-dlp -g 获取直链，ffmpeg 拉流截帧（最快最稳定）
+    try:
+        stream_url = _get_stream_url(url)
+        if stream_url:
+            cmd = [
+                FFMPEG_PATH, "-y",
+                "-ss", str(timestamp),
+                "-i", stream_url,
+                "-vframes", "1",
+                "-q:v", "2",
+                "-timeout", "20",
+                frame_path,
+            ]
+            subprocess.run(cmd, check=True, capture_output=True, timeout=30)
+            logger.info(f"Frame captured via stream: {timestamp}s → {frame_path}")
+            return frame_path
+    except Exception as e:
+        logger.warning(f"Stream capture failed: {e}, trying fallback...")
 
-    # 下载目标时间前后各 2 秒的视频片段（含视频流）
-    ydl_opts = {
-        "format": "best[height<=720]/best",
-        "outtmpl": tmp_video,
-        "quiet": True,
-        "no_warnings": True,
-        "download_ranges": lambda info, ydl: [{
-            "start_time": max(0, timestamp - 1),
-            "end_time": timestamp + 1,
-        }],
-        "force_keyframes_at_cuts": True,
-        "ffmpeg_location": os.path.dirname(FFMPEG_PATH),
-    }
-
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
-
-    # 从片段中截取目标帧
-    if os.path.exists(tmp_video):
-        cmd = [
-            FFMPEG_PATH, "-y",
-            "-ss", "1",  # 片段中约在1秒位置
-            "-i", tmp_video,
-            "-vframes", "1",
-            "-q:v", "2",
-            frame_path,
-        ]
-        subprocess.run(cmd, check=True, capture_output=True)
-        os.remove(tmp_video)
-        logger.info(f"Frame downloaded: {timestamp}s → {frame_path}")
-    else:
-        # fallback: yt-dlp 不支持 download_ranges，直接用原 URL 截取
-        # 这种方式对 B站等支持较好
+    # 方案2: ffmpeg 直接拉原 URL
+    try:
         _download_frame_fallback(url, timestamp, frame_path)
+    except Exception as e:
+        logger.error(f"Frame fallback also failed: {e}")
+        raise
 
     return frame_path
+
+
+def _get_stream_url(url: str) -> str:
+    """用 yt-dlp 获取最佳视频流直链（不下载）"""
+    import yt_dlp
+    ydl_opts = {
+        "format": "best[height<=720]/best",
+        "quiet": True,
+        "no_warnings": True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        return info.get("url", "")
 
 
 def _download_frame_fallback(url: str, timestamp: float, output_path: str):

@@ -71,15 +71,14 @@
             </div>
             <div class="chat-input-area">
                 <div class="input-row">
-                    <button id="modeToggle" class="btn btn-mode" title="切换提问模式">
-                        📝 文本提问
-                    </button>
+                    <span id="modeLabel" class="mode-label">📝 提问</span>
                 </div>
                 <div class="input-row">
-                    <input type="text" id="questionInput"
+                    <textarea id="questionInput"
                            placeholder="输入你的问题..."
                            disabled
-                           autocomplete="off">
+                           rows="1"
+                           autocomplete="off"></textarea>
                     <button id="sendBtn" class="btn btn-send" disabled>发送</button>
                 </div>
             </div>
