@@ -4,7 +4,6 @@
 """
 import os
 import uuid
-import logging
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
@@ -22,10 +21,18 @@ from backend.config import (
 for d in [UPLOAD_DIR, SUBTITLE_DIR, EMBEDDING_DIR, FRAME_DIR]:
     os.makedirs(d, exist_ok=True)
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("帧知")
+from loguru import logger
 
 app = FastAPI(title="帧知 - 视频学习Agent", version="0.1.0")
+
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info(f"🚀 帧知服务启动: http://{HOST}:{PORT}")
+    logger.info(f"   数据目录: {os.path.abspath(DATA_DIR)}")
+    logger.info(f"   DeepSeek模型: {DEEPSEEK_MODEL}")
+    logger.info(f"   Embedding模型: {SILICONFLOW_EMBEDDING_MODEL}")
+    logger.info(f"   Whisper模型: {WHISPER_MODEL_SIZE}")
 
 # CORS — 允许浏览器插件跨域请求
 app.add_middleware(
@@ -34,6 +41,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 请求日志中间件
+@app.middleware("http")
+async def log_requests(request, call_next):
+    from time import time
+    start = time()
+    response = await call_next(request)
+    elapsed = (time() - start) * 1000
+    # 跳过静态资源和健康检查
+    if not request.url.path.startswith("/static") and request.url.path != "/api/health":
+        logger.info(f"{request.method} {request.url.path} → {response.status_code} ({elapsed:.0f}ms)")
+    return response
 
 # ── 内存状态管理 (MVP阶段，后续可改Redis) ──
 video_states: dict = {}  # video_id → {status, video_path, video_hash, subtitles, ...}
@@ -79,6 +98,7 @@ async def generate_quiz_endpoint(video_id: str, req: dict):
         raise HTTPException(400, "视频尚未处理完成")
 
     timestamp = req.get("timestamp", 0)
+    logger.info(f"[{video_id}] 智能出题 @ {timestamp:.0f}s")
     result = await generate_quiz(
         video_hash=state["video_hash"],
         timestamp=timestamp,
@@ -235,6 +255,7 @@ async def ask_question(video_id: str, req: AskRequest):
     if state["status"] != "ready":
         raise HTTPException(400, f"视频尚未处理完成，当前状态: {state['status']}")
 
+    logger.info(f"[{video_id}] 文本提问: {req.question[:50]}...")
     result = await answer_text_question(
         video_hash=state["video_hash"],
         question=req.question,
@@ -400,7 +421,7 @@ async def _process_video_task(video_id: str):
     except Exception as e:
         state["status"] = "error"
         state["error"] = str(e)
-        logger.error(f"[{video_id}] Processing failed: {e}", exc_info=True)
+        logger.opt(exception=e).error(f"[{video_id}] Processing failed")
 
 
 async def _process_url_task(video_id: str, url: str):

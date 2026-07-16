@@ -50,3 +50,46 @@ FFMPEG_PATH = os.getenv("FFMPEG_PATH", "ffmpeg")
 
 # RAG 配置
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))  # 检索返回的chunk数量
+
+# ═══════════════════════════════════════════
+# Loguru 日志配置
+# ═══════════════════════════════════════════
+
+import sys
+from loguru import logger as _loguru_logger
+
+LOG_DIR = os.path.join(DATA_DIR, "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+
+# 移除默认 handler
+_loguru_logger.remove()
+
+# 控制台输出（彩色，简洁）
+_loguru_logger.add(
+    sys.stderr,
+    format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+    level="INFO",
+    colorize=True,
+)
+
+# 文件输出（完整，按日轮转，保留 14 天）
+_loguru_logger.add(
+    os.path.join(LOG_DIR, "framewise_{time:YYYY-MM-DD}.log"),
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+    level="DEBUG",
+    rotation="10 MB",
+    retention="14 days",
+    encoding="utf-8",
+    enqueue=True,  # 多进程安全
+)
+
+# 错误日志单独文件
+_loguru_logger.add(
+    os.path.join(LOG_DIR, "error_{time:YYYY-MM-DD}.log"),
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+    level="ERROR",
+    rotation="5 MB",
+    retention="30 days",
+    encoding="utf-8",
+    enqueue=True,
+)

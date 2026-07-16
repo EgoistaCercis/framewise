@@ -3,10 +3,8 @@
 基于 faster-whisper 实现本地语音转文字
 """
 import os
-import logging
+from loguru import logger
 from backend.config import WHISPER_MODEL_SIZE, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE, FFMPEG_PATH
-
-logger = logging.getLogger(__name__)
 
 # 全局模型实例（懒加载）
 _model = None

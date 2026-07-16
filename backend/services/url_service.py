@@ -5,15 +5,13 @@
 import os
 import re
 import json
-import logging
+from loguru import logger
 import tempfile
 import subprocess
 from pathlib import Path
 
 from backend.config import FFMPEG_PATH, DATA_DIR
 from backend.services.cache_service import frame_cache_path, frame_cache_exists
-
-logger = logging.getLogger(__name__)
 
 AUDIO_DIR = os.path.join(DATA_DIR, "audio")
 

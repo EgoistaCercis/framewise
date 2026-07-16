@@ -4,12 +4,10 @@
 """
 import os
 import sqlite3
-import logging
+from loguru import logger
 from datetime import datetime, date
 
 from backend.config import DATA_DIR
-
-logger = logging.getLogger(__name__)
 
 DB_PATH = os.path.join(DATA_DIR, "usage.db")
 
@@ -176,3 +174,4 @@ def get_stats_by_model() -> list[dict]:
 
 # 启动时初始化
 init_db()
+logger.debug(f"Usage DB initialized: {DB_PATH}")

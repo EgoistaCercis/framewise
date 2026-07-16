@@ -2,10 +2,8 @@
 帧知 - 字幕文本Chunk切分服务
 根据语义完整性和时间连续性切分字幕
 """
-import logging
+from loguru import logger
 from backend.config import CHUNK_MAX_LENGTH, CHUNK_OVERLAP
-
-logger = logging.getLogger(__name__)
 
 
 def chunk_subtitles(subtitles: list[dict], video_id: str) -> list[dict]:

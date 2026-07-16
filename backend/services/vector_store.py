@@ -2,7 +2,7 @@
 帧知 - FAISS向量存储与检索
 """
 import os
-import logging
+from loguru import logger
 import numpy as np
 import faiss
 from backend.config import EMBEDDING_DIR, RAG_TOP_K
@@ -10,8 +10,6 @@ from backend.services.cache_service import (
     embedding_cache_path, embedding_meta_path,
     embedding_cache_exists, save_embedding_meta, load_embedding_meta
 )
-
-logger = logging.getLogger(__name__)
 
 
 def build_index(chunks: list[dict], embeddings: list[list[float]], video_hash: str):

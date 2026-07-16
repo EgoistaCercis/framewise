@@ -4,13 +4,11 @@ ffmpeg提取视频帧 + Qwen VL (DashScope) 画面分析
 """
 import os
 import base64
-import logging
+from loguru import logger
 import subprocess
 import httpx
 from backend.config import DASHSCOPE_API_KEY, DASHSCOPE_VL_MODEL, FFMPEG_PATH
 from backend.services.cache_service import frame_cache_path, frame_cache_exists
-
-logger = logging.getLogger(__name__)
 
 
 async def extract_frame(video_path: str, timestamp: float, video_hash: str) -> str:

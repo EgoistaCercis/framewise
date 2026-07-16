@@ -2,15 +2,13 @@
 帧知 - RAG问答服务
 检索 + DeepSeek LLM 生成答案
 """
-import logging
+from loguru import logger
 import httpx
 from backend.config import (
     DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, RAG_TOP_K
 )
 from backend.services.embedding_service import embed_single
 from backend.services.vector_store import load_index, search
-
-logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """你是视频学习助手"帧知"，帮助用户理解和学习视频内容。
 

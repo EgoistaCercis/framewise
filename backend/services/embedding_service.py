@@ -2,13 +2,11 @@
 帧知 - Embedding向量化服务
 通过硅基流动 SiliconFlow API 调用 BAAI/bge-m3
 """
-import logging
+from loguru import logger
 import httpx
 from backend.config import (
     SILICONFLOW_API_KEY, SILICONFLOW_BASE_URL, SILICONFLOW_EMBEDDING_MODEL
 )
-
-logger = logging.getLogger(__name__)
 
 EMBEDDING_DIM = 1024  # BGE-M3 输出维度
 
