@@ -13,12 +13,13 @@ logger = logging.getLogger(__name__)
 EMBEDDING_DIM = 1024  # BGE-M3 输出维度
 
 
-async def embed_texts(texts: list[str]) -> list[list[float]]:
+async def embed_texts(texts: list[str], video_id: str = None) -> list[list[float]]:
     """
     批量文本向量化
 
     参数:
         texts: 文本列表
+        video_id: 关联的视频ID（用于统计）
     返回:
         向量列表 [[float, ...], ...]
     """
@@ -64,6 +65,7 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
                         call_type="embedding",
                         input_tokens=total_tokens,
                         output_tokens=0,
+                        video_id=video_id,
                     )
 
                 logger.debug(f"Embedded batch {i // batch_size + 1}: {len(batch)} texts")
@@ -75,7 +77,7 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
     return all_embeddings
 
 
-async def embed_single(text: str) -> list[float]:
+async def embed_single(text: str, video_id: str = None) -> list[float]:
     """单个文本向量化"""
-    results = await embed_texts([text])
+    results = await embed_texts([text], video_id=video_id)
     return results[0]

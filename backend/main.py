@@ -296,7 +296,7 @@ async def ask_with_frame(video_id: str, req: AskFrameRequest):
         with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
             tmp.write(frame_data)
             frame_path = tmp.name
-        description = await analyze_frame(frame_path)
+        description = await analyze_frame(frame_path, video_id=video_id)
         frame_result = {"frame_path": frame_path, "description": description}
         # 清理临时文件
         os.unlink(frame_path)
@@ -304,7 +304,7 @@ async def ask_with_frame(video_id: str, req: AskFrameRequest):
         # URL模式服务端截帧
         from backend.services.url_service import download_frame_at_time
         frame_path = download_frame_at_time(state["url"], req.timestamp, video_id)
-        description = await analyze_frame(frame_path)
+        description = await analyze_frame(frame_path, video_id=video_id)
         frame_result = {"frame_path": frame_path, "description": description}
     else:
         # 本地视频服务端截帧
@@ -388,7 +388,7 @@ async def _process_video_task(video_id: str):
         # 4. Embedding
         logger.info(f"[{video_id}] Generating embeddings for {len(chunks)} chunks...")
         chunk_texts = [c["text"] for c in chunks]
-        embeddings = await embed_texts(chunk_texts)
+        embeddings = await embed_texts(chunk_texts, video_id=video_id)
 
         # 5. 构建FAISS索引
         build_index(chunks, embeddings, video_hash)
@@ -443,7 +443,7 @@ async def _process_url_task(video_id: str, url: str):
         state["chunks"] = chunks
 
         chunk_texts = [c["text"] for c in chunks]
-        embeddings = await embed_texts(chunk_texts)
+        embeddings = await embed_texts(chunk_texts, video_id=video_id)
         build_index(chunks, embeddings, video_hash)
 
         state["status"] = "ready"

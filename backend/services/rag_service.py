@@ -50,7 +50,7 @@ async def answer_text_question(
     index, meta = load_index(video_hash)
 
     # Step 2: 问题向量化
-    query_embedding = await embed_single(question)
+    query_embedding = await embed_single(question, video_id=video_id)
 
     # Step 3: 检索
     results = search(index, meta, query_embedding, top_k)
@@ -109,7 +109,7 @@ async def answer_with_frame_context(
     index, meta = load_index(video_hash)
 
     # 检索
-    query_embedding = await embed_single(question)
+    query_embedding = await embed_single(question, video_id=video_id)
     results = search(index, meta, query_embedding, top_k)
 
     # 构建上下文
@@ -191,7 +191,7 @@ async def generate_quiz(
     index, meta = load_index(video_hash)
 
     # 找到当前时间戳附近的 chunks（优先当前时间的）
-    query_embedding = await embed_single("当前正在讲解的内容")
+    query_embedding = await embed_single("当前正在讲解的内容", video_id=video_id)
     all_results = search(index, meta, query_embedding, top_k=10)
 
     # 筛选出当前时间附近的内容（前后各30秒）

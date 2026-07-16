@@ -45,12 +45,13 @@ async def extract_frame(video_path: str, timestamp: float, video_hash: str) -> s
     return cache_path
 
 
-async def analyze_frame(frame_path: str) -> str:
+async def analyze_frame(frame_path: str, video_id: str = None) -> str:
     """
     使用 Qwen VL 分析帧内容
 
     参数:
         frame_path: 帧图片路径
+        video_id: 关联的视频ID（用于统计）
 
     返回: 画面描述文本
     """
@@ -96,6 +97,7 @@ async def analyze_frame(frame_path: str) -> str:
             call_type="vision",
             input_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
+            video_id=video_id,
         )
 
         description = data["output"]["choices"][0]["message"]["content"]
