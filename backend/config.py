@@ -58,38 +58,78 @@ RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))  # 检索返回的chunk数量
 import sys
 from loguru import logger as _loguru_logger
 
+LOG_FORMAT = (
+    "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+    "<level>{level: <8}</level> | "
+    "<magenta>req-{extra[request_id]}</magenta> | "
+    "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - "
+    "<level>{message}</level>"
+)
+
+LOG_FORMAT_FILE = (
+    "{time:YYYY-MM-DD HH:mm:ss.SSS} | "
+    "{level: <8} | "
+    "req-{extra[request_id]} | "
+    "{name}:{function}:{line} - "
+    "{message}"
+)
+
 LOG_DIR = os.path.join(DATA_DIR, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
-# 移除默认 handler
 _loguru_logger.remove()
 
-# 控制台输出（彩色，简洁）
+# 控制台（彩色）
 _loguru_logger.add(
     sys.stderr,
-    format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+    format=LOG_FORMAT,
     level="INFO",
     colorize=True,
 )
 
-# 文件输出（完整，按日轮转，保留 14 天）
+# 全量日志文件（午夜轮转，保留 14 天）
 _loguru_logger.add(
-    os.path.join(LOG_DIR, "framewise_{time:YYYY-MM-DD}.log"),
-    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+    os.path.join(LOG_DIR, "framewise.log"),
+    format=LOG_FORMAT_FILE,
     level="DEBUG",
-    rotation="10 MB",
+    rotation="00:00",
     retention="14 days",
     encoding="utf-8",
-    enqueue=True,  # 多进程安全
+    enqueue=True,
 )
 
 # 错误日志单独文件
 _loguru_logger.add(
-    os.path.join(LOG_DIR, "error_{time:YYYY-MM-DD}.log"),
-    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+    os.path.join(LOG_DIR, "error.log"),
+    format=LOG_FORMAT_FILE,
     level="ERROR",
-    rotation="5 MB",
+    rotation="00:00",
     retention="30 days",
     encoding="utf-8",
     enqueue=True,
 )
+
+# 设置默认 extra，防止 KeyError
+_loguru_logger.configure(extra={"request_id": ""})
+
+# 拦截标准 logging 模块，uvicorn/FastAPI 的日志也走 loguru
+import logging as _logging
+
+class _InterceptHandler(_logging.Handler):
+    def emit(self, record):
+        level = _loguru_logger.level(record.levelname).name if _loguru_logger.level(record.levelname) else record.levelno
+        frame = _logging.currentframe()
+        depth = 2
+        while frame and frame.f_code.co_filename == _logging.__file__:
+            frame = frame.f_back
+            depth += 1
+        _loguru_logger.opt(depth=depth, exception=record.exc_info).log(
+            level, record.getMessage()
+        )
+
+_logging.basicConfig(handlers=[_InterceptHandler()], level=0, force=True)
+
+# 将 uvicorn 的日志级别设为 INFO，避免 DEBUG 噪音
+for _name in ["uvicorn", "uvicorn.access", "uvicorn.error"]:
+    _logging.getLogger(_name).handlers = [_InterceptHandler()]
+    _logging.getLogger(_name).propagate = False

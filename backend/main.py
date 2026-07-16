@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from backend.config import (
     UPLOAD_DIR, SUBTITLE_DIR, EMBEDDING_DIR, FRAME_DIR,
-    HOST, PORT,
+    HOST, PORT, DATA_DIR, DEEPSEEK_MODEL, SILICONFLOW_EMBEDDING_MODEL, WHISPER_MODEL_SIZE,
 )
 
 # 确保目录存在
@@ -42,16 +42,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 请求日志中间件
+# 请求日志中间件（含 request_id 追踪）
 @app.middleware("http")
 async def log_requests(request, call_next):
+    import uuid
     from time import time
+
+    req_id = uuid.uuid4().hex[:8]
     start = time()
-    response = await call_next(request)
-    elapsed = (time() - start) * 1000
-    # 跳过静态资源和健康检查
-    if not request.url.path.startswith("/static") and request.url.path != "/api/health":
-        logger.info(f"{request.method} {request.url.path} → {response.status_code} ({elapsed:.0f}ms)")
+
+    with logger.contextualize(request_id=req_id):
+        response = await call_next(request)
+        elapsed = (time() - start) * 1000
+        if not request.url.path.startswith("/static") and request.url.path != "/api/health":
+            logger.info(f"{request.method} {request.url.path} → {response.status_code} ({elapsed:.0f}ms)")
     return response
 
 # ── 内存状态管理 (MVP阶段，后续可改Redis) ──
