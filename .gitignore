@@ -27,8 +27,17 @@ venv/
 .DS_Store
 Thumbs.db
 
-# 项目文件
+# 脚本工具
+scripts/
+
+# 项目文档
 *.docx
+~$*.docx
+
+# Claude Code 本地配置
+.claude/
+.agents/
+skills-lock.json
 
 # 原始素材（大文件）
 extension/帧知.png
