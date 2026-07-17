@@ -31,8 +31,7 @@ Thumbs.db
 scripts/
 
 # 项目文档
-*.docx
-~$*.docx
+项目文档/
 
 # Claude Code 本地配置
 .claude/
