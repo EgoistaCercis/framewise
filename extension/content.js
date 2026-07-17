@@ -171,6 +171,8 @@
             '-webkit-background-clip:text;-webkit-text-fill-color:transparent;">' +
             '🎬 帧知</span>' +
             '<span id="fw-status" style="flex:1;margin-left:10px;font-size:12px;color:#999;"></span>' +
+            '<button id="fw-history" title="历史记录" style="background:#252540;border:1px solid #2a2a45;' +
+            'color:#999;font-size:14px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:4px;">📋</button>' +
             '<button id="fw-auto" title="自动处理新视频" style="background:#2a2a55;border:1px solid #6c5ce7;' +
             'color:#e0e0f0;font-size:14px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:4px;">🤖</button>' +
             '<button id="fw-process" title="手动处理当前视频" style="background:#252540;border:1px solid #2a2a45;' +
@@ -227,11 +229,60 @@
     var isVisionMode = false;
 
     var autoMode = true;  // 默认自动处理
-    var lastUrl = location.href;
+    var lastUrl = cleanUrl(location.href);
 
     function bindEvents() {
         var closeBtn = document.getElementById("fw-close");
         if (closeBtn) closeBtn.onclick = hidePanel;
+
+        var histBtn = document.getElementById("fw-history");
+        if (histBtn) histBtn.onclick = function () {
+            fetch(API_BASE + "/api/conversations")
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    var container = document.getElementById("fw-messages");
+                    if (!container) return;
+                    container.innerHTML = "";
+                    if (!data.length) {
+                        addMsg("system", "暂无历史对话记录");
+                        return;
+                    }
+                    var html = '<div style="font-size:14px;font-weight:600;color:#e0e0f0;padding:4px 0 12px;border-bottom:1px solid #2a2a45;margin-bottom:8px;">📋 历史对话</div>';
+                    data.forEach(function (conv) {
+                        html += '<div class="fw-hist-item" data-vid="' + esc(conv.video_id) +
+                            '" style="padding:10px 12px;border-radius:8px;background:#252540;cursor:pointer;margin-bottom:6px;">' +
+                            '<div style="font-size:13px;color:#e0e0f0;">' + esc(conv.title) + '</div>' +
+                            '<div style="font-size:11px;color:#999;">' + conv.msg_count + ' messages - ' + (conv.last_time || '').slice(0, 10) + '</div>' +
+                            '</div>';
+                    });
+                    container.innerHTML = html;
+                    container.querySelectorAll(".fw-hist-item").forEach(function (el) {
+                        el.onclick = function () {
+                            window._fwReady = false;
+                            videoId = this.dataset.vid;
+                            // 检查状态，如果ready直接加载历史
+                            fetch(API_BASE + "/api/videos/" + videoId)
+                                .then(function (r) { return r.json(); })
+                                .then(function (info) {
+                                    if (info.status === "ready") {
+                                        window._fwReady = true;
+                                        updateStatus("✅ 就绪 (" + (info.chunk_count || "?") + " 片段)");
+                                        var inp = document.getElementById("fw-input");
+                                        var snd = document.getElementById("fw-send");
+                                        if (inp) inp.disabled = false;
+                                        if (snd) snd.disabled = false;
+                                        loadHistory();
+                                    } else {
+                                        updateStatus("⏳ 视频需重新处理");
+                                        initVideo();
+                                    }
+                                });
+                        };
+                    });
+                }).catch(function (e) {
+                    addMsg("error", "加载失败: " + e.message);
+                });
+        };
 
         var minBtn = document.getElementById("fw-minimize");
         if (minBtn) minBtn.onclick = minimizePanel;
@@ -313,16 +364,41 @@
             };
         }
 
-        // 时间更新 + 自动检测暂停状态 + URL变化检测
+        // 时间更新 + 自动检测暂停状态 + URL变化检测 + 连接检测
         setInterval(updateTime, 1000);
         setInterval(checkUrlChange, 2000);
+        setInterval(checkConnection, 10000);
+    }
+
+    // ── 断线重连 ──
+    var isOffline = false;
+    function checkConnection() {
+        fetch(API_BASE + "/api/health")
+            .then(function (r) { return r.json(); })
+            .then(function () {
+                if (isOffline) {
+                    isOffline = false;
+                    updateStatus("✅ 已重连");
+                    // 重连后恢复，如果有视频ID则检查状态
+                    if (videoId && !window._fwReady && !isPolling) {
+                        pollStatus();
+                    }
+                }
+            })
+            .catch(function () {
+                if (!isOffline) {
+                    isOffline = true;
+                    updateStatus("⚠️ 连接断开");
+                }
+            });
     }
 
     // ── URL 变化检测（合集/列表自动跳转） ──
     function checkUrlChange() {
-        if (location.href !== lastUrl) {
-            console.log("[帧知] URL changed:", lastUrl, "→", location.href);
-            lastUrl = location.href;
+        var cur = cleanUrl(location.href);
+        if (cur !== lastUrl) {
+            console.log("[帧知] URL changed:", lastUrl, "→", cur);
+            lastUrl = cur;
             if (autoMode) {
                 videoId = null;
                 window._fwReady = false;
@@ -413,14 +489,28 @@
     var videoId = null;
     window._fwReady = false;
 
+    function cleanUrl(url) {
+        // 去除跟踪参数
+        try {
+            var u = new URL(url);
+            var keep = ["v", "list"];  // 保留的参数
+            var newSearch = "";
+            keep.forEach(function (k) {
+                if (u.searchParams.has(k)) newSearch += (newSearch ? "&" : "") + k + "=" + u.searchParams.get(k);
+            });
+            return u.origin + u.pathname + (newSearch ? "?" + newSearch : "");
+        } catch (e) { return url; }
+    }
+
     async function initVideo() {
         updateStatus("⏳ 建立索引...");
+        var clean = cleanUrl(location.href);
         try {
-            console.log("[帧知] 请求 from_url:", location.href);
+            console.log("[帧知] 请求 from_url:", clean);
             var resp = await fetch(API_BASE + "/api/videos/from_url", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ url: location.href }),
+                body: JSON.stringify({ url: clean }),
             });
             if (!resp.ok) throw new Error("HTTP " + resp.status);
             var data = await resp.json();
@@ -451,7 +541,7 @@
                     if (inp) { inp.disabled = false; inp.focus(); }
                     if (snd) snd.disabled = false;
                     if (proc) { proc.disabled = false; proc.style.opacity = "1"; }
-                    addMsg("system", "✅ 视频已索引，开始提问吧！");
+                    loadHistory();
                     return;
                 }
                 if (data.status === "error") {
@@ -465,6 +555,27 @@
             }
         };
         check();
+    }
+
+    // ── 加载聊天历史 ──
+    function loadHistory() {
+        fetch(API_BASE + "/api/videos/" + videoId + "/history?limit=50")
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (!data || !data.length) return;
+                var container = document.getElementById("fw-messages");
+                if (!container) return;
+                container.innerHTML = "";
+                data.forEach(function (msg) {
+                    if (msg.role === "user") {
+                        addMsg("user", esc(msg.content));
+                    } else if (msg.role === "assistant") {
+                        addMsg("assistant", esc(msg.content));
+                    }
+                });
+            }).catch(function (e) {
+                console.error("[帧知] Failed to load history:", e);
+            });
     }
 
     // ═══════════════════════════════════════════

@@ -273,7 +273,21 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    flex: 1;
 }
+
+.btn-history {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 16px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: all 0.2s;
+    flex-shrink: 0;
+}
+.btn-history:hover { border-color: var(--primary); color: var(--text); }
 
 .chat-messages {
     flex: 1;
@@ -386,6 +400,41 @@ body {
 
 #questionInput:focus { border-color: var(--primary); }
 #questionInput:disabled { opacity: 0.5; }
+
+/* ── 历史记录列表 ── */
+.history-list-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    padding: 4px 0 12px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
+}
+
+.history-item {
+    padding: 12px 14px;
+    border-radius: 8px;
+    background: var(--surface2);
+    cursor: pointer;
+    transition: background 0.2s;
+    margin-bottom: 6px;
+}
+.history-item:hover { background: var(--border); }
+
+.history-item-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    margin-bottom: 4px;
+}
+
+.history-item-meta {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
 
 /* ── 响应式 ── */
 @media (max-width: 768px) {

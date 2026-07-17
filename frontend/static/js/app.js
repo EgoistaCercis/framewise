@@ -194,8 +194,9 @@
                     questionInput.placeholder = "输入你的问题...";
                     questionInput.focus();
 
-                    // 加载字幕
+                    // 加载字幕和历史记录
                     await loadSubtitles();
+                    await loadChatHistory();
                     isPolling = false;
                     return;
                 }
@@ -222,6 +223,26 @@
         };
 
         poll();
+    }
+
+    async function loadChatHistory() {
+        try {
+            const resp = await fetch(`/api/videos/${currentVideoId}/history?limit=50`);
+            const data = await resp.json();
+            if (!data || !data.length) return;
+
+            // 清空系统消息，展示历史记录
+            chatMessages.innerHTML = "";
+            for (const msg of data) {
+                if (msg.role === "user") {
+                    addMessage("user", msg.content);
+                } else if (msg.role === "assistant") {
+                    addMessage("assistant", escapeHtml(msg.content));
+                }
+            }
+        } catch (e) {
+            console.error("Failed to load history:", e);
+        }
     }
 
     async function loadSubtitles() {
@@ -418,6 +439,62 @@
         }
     }
 
+    // ── 历史记录面板 ──
+    const historyBtn = document.getElementById("historyBtn");
+    let showingHistory = false;
+
+    historyBtn.addEventListener("click", async () => {
+        if (showingHistory) {
+            // 返回当前对话
+            showingHistory = false;
+            historyBtn.textContent = "📋";
+            if (currentVideoId) await loadChatHistory();
+        } else {
+            // 显示所有历史记录列表
+            showingHistory = true;
+            historyBtn.textContent = "✕";
+            try {
+                const resp = await fetch("/api/conversations");
+                const data = await resp.json();
+                chatMessages.innerHTML = "";
+                if (!data.length) {
+                    addMessage("system", "暂无历史对话记录");
+                } else {
+                    let html = '<div class="history-list-title">📋 历史对话</div>';
+                    for (const conv of data) {
+                        html += `<div class="history-item" data-vid="${escapeHtml(conv.video_id)}">
+                            <div class="history-item-title">${escapeHtml(conv.title)}</div>
+                            <div class="history-item-meta">${conv.msg_count} 条消息 · ${conv.last_time?.slice(0, 10)}</div>
+                        </div>`;
+                    }
+                    chatMessages.innerHTML = html;
+                    // 点击历史项：切换到该视频的对话
+                    document.querySelectorAll(".history-item").forEach(el => {
+                        el.addEventListener("click", async () => {
+                            const vid = el.dataset.vid;
+                            currentVideoId = vid;
+                            showingHistory = false;
+                            historyBtn.textContent = "📋";
+                            videoName.textContent = el.querySelector(".history-item-title").textContent;
+                            // 恢复视频播放器状态
+                            const vResp = await fetch(`/api/videos/${vid}`);
+                            const vData = await vResp.json();
+                            if (vData.is_url_mode && vData.embed_url) {
+                                isUrlMode = true;
+                                showUrlPlayer(vid);
+                            }
+                            questionInput.disabled = false;
+                            sendBtn.disabled = false;
+                            await loadChatHistory();
+                        });
+                    });
+                }
+            } catch (e) {
+                addMessage("error", "加载历史记录失败: " + e.message);
+            }
+        }
+    });
+
     // ── 费用统计 ──
     const costDisplay = document.getElementById("costDisplay");
 
@@ -461,7 +538,37 @@
         }
     });
 
+    // ── 断线重连 ──
+    let isOffline = false;
+    async function checkConnection() {
+        try {
+            const resp = await fetch("/api/health");
+            if (resp.ok && isOffline) {
+                isOffline = false;
+                console.log("[帧知] 重连成功");
+                if (currentVideoId) {
+                    // 重新检查视频状态
+                    const vResp = await fetch(`/api/videos/${currentVideoId}`);
+                    const vData = await vResp.json();
+                    if (vData.status === "ready" && !sendBtn.disabled === false) {
+                        questionInput.disabled = false;
+                        sendBtn.disabled = false;
+                        await loadChatHistory();
+                    } else if (vData.status === "processing") {
+                        pollProcessingStatus();
+                    }
+                }
+            }
+        } catch (e) {
+            if (!isOffline) {
+                isOffline = true;
+                uploadStatus.textContent = "⚠️ 连接断开，正在重连...";
+            }
+        }
+    }
+
     // 页面加载后获取费用，并定时刷新
     refreshCost();
-    setInterval(refreshCost, 30000);  // 每30秒刷新
+    setInterval(refreshCost, 30000);
+    setInterval(checkConnection, 10000);  // 每10秒检查连接
 })();

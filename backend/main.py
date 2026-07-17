@@ -4,6 +4,8 @@
 """
 import os
 import uuid
+import json
+import hashlib
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
@@ -58,8 +60,46 @@ async def log_requests(request, call_next):
             logger.info(f"{request.method} {request.url.path} → {response.status_code} ({elapsed:.0f}ms)")
     return response
 
-# ── 内存状态管理 (MVP阶段，后续可改Redis) ──
-video_states: dict = {}  # video_id → {status, video_path, video_hash, subtitles, ...}
+# ── 状态持久化管理 ──
+
+STATES_FILE = os.path.join(DATA_DIR, "video_states.json")
+video_states: dict = {}
+
+def _save_states():
+    """持久化 video_states 到文件"""
+    try:
+        serializable = {}
+        for vid, state in video_states.items():
+            s = {k: v for k, v in state.items()}
+            # 不序列化大对象（subtitles, chunks 有单独缓存）
+            s.pop("subtitles", None)
+            s.pop("chunks", None)
+            serializable[vid] = s
+        with open(STATES_FILE, "w", encoding="utf-8") as f:
+            json.dump(serializable, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"Failed to save states: {e}")
+
+
+def _load_states():
+    """从文件恢复 video_states"""
+    global video_states
+    if os.path.exists(STATES_FILE):
+        try:
+            with open(STATES_FILE, "r", encoding="utf-8") as f:
+                video_states = json.load(f)
+            # 更新 data 目录路径（可能在别的机器上不同）
+            for vid, state in video_states.items():
+                if state.get("video_path") and not os.path.exists(state["video_path"]):
+                    state["video_path"] = None  # 本地文件已不存在
+            logger.info(f"Restored {len(video_states)} video states from disk")
+        except Exception as e:
+            logger.warning(f"Failed to load states: {e}")
+            video_states = {}
+    else:
+        video_states = {}
+
+_load_states()
 
 
 # ═══════════════════════════════════════════
@@ -111,6 +151,20 @@ async def generate_quiz_endpoint(video_id: str, req: dict):
     return result
 
 
+@app.get("/api/videos/{video_id}/history")
+async def get_chat_history(video_id: str, limit: int = 50):
+    """获取视频的聊天记录"""
+    from backend.services.conversation_service import get_history
+    return get_history(video_id, limit)
+
+
+@app.get("/api/conversations")
+async def list_conversations():
+    """列出所有有对话记录的视频"""
+    from backend.services.conversation_service import list_conversations
+    return list_conversations()
+
+
 @app.get("/api/usage/today")
 async def usage_today():
     """今日用量统计"""
@@ -151,8 +205,36 @@ async def process_url(background_tasks: BackgroundTasks, req: dict):
     if not url:
         raise HTTPException(400, "请提供视频链接")
 
-    # 生成唯一ID
-    video_id = uuid.uuid4().hex[:12]
+    # URL标准化：提取规范ID，去除跟踪参数
+    canonical_id = _canonical_video_id(url)
+    video_id = hashlib.md5(canonical_id.encode()).hexdigest()[:12]
+
+    # 检查内存状态
+    if video_id in video_states and video_states[video_id].get("status") == "ready":
+        logger.info(f"Video already ready (memory): {video_id}")
+        return {
+            "video_id": video_id,
+            "status": "ready",
+            "title": video_states[video_id]["original_name"],
+        }
+
+    # 检查磁盘缓存（服务重启后内存清空，但磁盘缓存还在）
+    from backend.services.cache_service import embedding_cache_exists, subtitle_cache_exists
+    if embedding_cache_exists(video_id) or subtitle_cache_exists(video_id):
+        logger.info(f"Video already indexed (disk cache): {video_id}")
+        video_states[video_id] = {
+            "status": "ready",
+            "video_path": None,
+            "video_hash": video_id,
+            "original_name": url,
+            "subtitles": None,
+            "chunks": None,
+            "url": url,
+            "embed_url": url,
+            "is_url_mode": True,
+        }
+        _save_states()
+        return {"video_id": video_id, "status": "ready", "title": url}
 
     # 获取视频信息
     try:
@@ -176,6 +258,7 @@ async def process_url(background_tasks: BackgroundTasks, req: dict):
 
     # 后台处理：下载音频 → ASR → Chunk → Embedding
     background_tasks.add_task(_process_url_task, video_id, url)
+    _save_states()
 
     logger.info(f"URL video processing: {video_id} ({info['title']})")
     return {
@@ -266,6 +349,10 @@ async def ask_question(video_id: str, req: AskRequest):
         video_id=video_id,
     )
 
+    # 保存对话记录
+    from backend.services.conversation_service import save_exchange
+    save_exchange(video_id, req.question, result["answer"])
+
     return {
         "video_id": video_id,
         "question": req.question,
@@ -348,6 +435,10 @@ async def ask_with_frame(video_id: str, req: AskFrameRequest):
         video_id=video_id,
     )
 
+    # 保存对话记录
+    from backend.services.conversation_service import save_exchange
+    save_exchange(video_id, req.question, result["answer"])
+
     return {
         "video_id": video_id,
         "question": req.question,
@@ -377,6 +468,25 @@ async def serve_video(video_id: str):
 
 
 # ═══════════════════════════════════════════
+def _canonical_video_id(url: str) -> str:
+    """从URL提取规范视频ID，忽略跟踪参数"""
+    from urllib.parse import urlparse, parse_qs
+    import re
+    bv = re.search(r'(BV\w+)', url)
+    if bv:
+        return f"bilibili:{bv.group(1)}"
+    ep = re.search(r'/bangumi/play/(\w+)', url)
+    if ep:
+        return f"bilibili:ep{ep.group(1)}"
+    parsed = urlparse(url)
+    if "youtube.com" in parsed.netloc or "youtu.be" in parsed.netloc:
+        yt_id = (parsed.path.strip("/") if "youtu.be" in parsed.netloc
+                 else parse_qs(parsed.query).get("v", [""])[0])
+        if yt_id:
+            return f"youtube:{yt_id}"
+    return parsed.scheme + "://" + parsed.netloc + parsed.path
+
+
 # 后台任务
 # ═══════════════════════════════════════════
 
@@ -420,18 +530,20 @@ async def _process_video_task(video_id: str):
 
         # 6. 更新状态
         state["status"] = "ready"
+        _save_states()
         logger.info(f"[{video_id}] Processing complete! Ready for Q&A.")
 
     except Exception as e:
         state["status"] = "error"
         state["error"] = str(e)
+        _save_states()
         logger.opt(exception=e).error(f"[{video_id}] Processing failed")
 
 
 async def _process_url_task(video_id: str, url: str):
     """后台处理URL视频：下载音频 → ASR → Chunk → Embedding"""
     from backend.services.url_service import download_audio, cleanup_audio
-    from backend.services.cache_service import get_video_hash, save_subtitle_cache, subtitle_cache_exists, load_subtitle_cache
+    from backend.services.cache_service import save_subtitle_cache, subtitle_cache_exists, load_subtitle_cache
     from backend.services.asr_service import transcribe
     from backend.services.chunk_service import chunk_subtitles
     from backend.services.embedding_service import embed_texts
@@ -447,18 +559,17 @@ async def _process_url_task(video_id: str, url: str):
         logger.info(f"[{video_id}] Downloading audio from URL...")
         audio_path = download_audio(url, video_id)
 
-        # 2. 计算音频Hash（用作缓存key）
-        video_hash = get_video_hash(audio_path)
-        state["video_hash"] = video_hash
+        # 2. URL模式用video_id作缓存键（同一URL永远同一ID，无需音频hash）
+        state["video_hash"] = video_id
 
         # 3. 检查字幕缓存
-        if subtitle_cache_exists(video_hash):
+        if subtitle_cache_exists(video_id):
             logger.info(f"[{video_id}] Subtitle cache hit")
-            subtitles = load_subtitle_cache(video_hash)
+            subtitles = load_subtitle_cache(video_id)
         else:
             logger.info(f"[{video_id}] Starting ASR...")
             subtitles = transcribe(audio_path)
-            save_subtitle_cache(video_hash, subtitles)
+            save_subtitle_cache(video_id, subtitles)
 
         state["subtitles"] = subtitles
         logger.info(f"[{video_id}] ASR done: {len(subtitles)} segments")
@@ -469,15 +580,17 @@ async def _process_url_task(video_id: str, url: str):
 
         chunk_texts = [c["text"] for c in chunks]
         embeddings = await embed_texts(chunk_texts, video_id=video_id)
-        build_index(chunks, embeddings, video_hash)
+        build_index(chunks, embeddings, video_id)
 
         state["status"] = "ready"
+        _save_states()
         logger.info(f"[{video_id}] URL processing complete! Ready for Q&A.")
 
     except Exception as e:
         state["status"] = "error"
         state["error"] = str(e)
-        logger.error(f"[{video_id}] URL processing failed: {e}", exc_info=True)
+        _save_states()
+        logger.opt(exception=e).error(f"[{video_id}] URL processing failed")
     finally:
         if audio_path and os.path.exists(audio_path):
             cleanup_audio(video_id)

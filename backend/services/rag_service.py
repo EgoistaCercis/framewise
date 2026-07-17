@@ -63,13 +63,14 @@ async def answer_text_question(
     context = "\n\n".join(context_parts)
 
     # Step 5: 调用LLM
-    user_prompt = f"""以下是视频字幕中的相关片段：
+    conv_ctx = await _get_conversation_context(video_id)
+    user_prompt = f"""{conv_ctx}以下是视频字幕中的相关片段：
 
 {context}
 
 用户问题：{question}
 
-请根据以上字幕内容回答用户问题。"""
+请根据以上字幕内容和对话上下文回答用户问题。"""
 
     answer = await _call_deepseek(user_prompt, video_id=video_id)
 
@@ -119,7 +120,8 @@ async def answer_with_frame_context(
 
     context = "\n\n".join(context_parts)
 
-    user_prompt = f"""以下是视频字幕中的相关片段：
+    conv_ctx = await _get_conversation_context(video_id)
+    user_prompt = f"""{conv_ctx}以下是视频字幕中的相关片段：
 
 {context}
 
@@ -129,7 +131,7 @@ async def answer_with_frame_context(
 
 用户问题：{question}
 
-请结合以上字幕内容和画面信息，综合回答用户问题。"""
+请结合以上字幕内容、画面信息和对话上下文，综合回答用户问题。"""
 
     answer = await _call_deepseek(user_prompt, video_id=video_id)
 
@@ -248,6 +250,17 @@ def _parse_quiz(text: str) -> list[dict]:
             questions.append({"question": question, "answer": answer})
 
     return questions
+
+
+async def _get_conversation_context(video_id: str) -> str:
+    """加载对话上下文（用于拼入 Prompt）"""
+    if not video_id:
+        return ""
+    try:
+        from backend.services.conversation_service import get_recent_context
+        return get_recent_context(video_id, turns=5)
+    except Exception:
+        return ""
 
 
 async def _call_deepseek(user_prompt: str, video_id: str = None, system_prompt: str = None) -> str:
