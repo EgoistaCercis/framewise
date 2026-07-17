@@ -10,7 +10,7 @@ import tempfile
 import subprocess
 from pathlib import Path
 
-from backend.config import FFMPEG_PATH, DATA_DIR
+from backend.config import FFMPEG_PATH, DATA_DIR, ASR_MODE
 from backend.services.cache_service import frame_cache_path, frame_cache_exists
 
 AUDIO_DIR = os.path.join(DATA_DIR, "audio")
@@ -43,6 +43,31 @@ def get_video_info(url: str) -> dict:
     return result
 
 
+def get_audio_stream_url(url: str) -> str | None:
+    """用 yt-dlp 获取音频直链（不下载），直接传给 ASR API 处理"""
+    import yt_dlp
+    ydl_opts = {
+        "format": "bestaudio[protocol!=m3u8]/bestaudio/best",
+        "quiet": True,
+        "no_warnings": True,
+        "force_ipv4": True,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://www.bilibili.com/",
+        },
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            stream_url = info.get("url", "")
+            if stream_url:
+                logger.info(f"Got audio stream URL ({len(stream_url)} chars)")
+                return stream_url
+    except Exception as e:
+        logger.warning(f"Failed to get stream URL: {e}")
+    return None
+
+
 def download_audio(url: str, video_id: str) -> str:
     """
     只下载音频，返回音频文件路径
@@ -56,10 +81,17 @@ def download_audio(url: str, video_id: str) -> str:
 
     # 第一步：用 yt-dlp 下载最佳音频
     ydl_opts = {
-        "format": "bestaudio/best",
+        "format": "bestaudio[protocol!=m3u8]/bestaudio/best",
         "outtmpl": output_template,
         "quiet": True,
         "no_warnings": True,
+        "retries": 5,
+        "socket_timeout": 30,
+        "force_ipv4": True,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://www.bilibili.com/",
+        },
         "postprocessors": [{
             "key": "FFmpegExtractAudio",
             "preferredcodec": "mp3",
@@ -76,24 +108,37 @@ def download_audio(url: str, video_id: str) -> str:
     if not os.path.exists(mp3_path):
         raise FileNotFoundError(f"Audio download failed, expected: {mp3_path}")
 
-    # 第二步：转成 16kHz mono WAV（faster-whisper 需要）
-    wav_path = os.path.join(AUDIO_DIR, f"{video_id}.wav")
-    cmd = [
-        FFMPEG_PATH, "-y",
-        "-i", mp3_path,
-        "-ar", "16000",
-        "-ac", "1",
-        "-sample_fmt", "s16",
-        wav_path,
-    ]
-    subprocess.run(cmd, check=True, capture_output=True)
+    # 第二步：转成 16kHz mono（API模式用mp3省带宽，本地模式用wav）
+    if ASR_MODE == "api":
+        # API模式：压缩为低码率 mp3（上传快）
+        final_path = os.path.join(AUDIO_DIR, f"{video_id}_asr.mp3")
+        cmd = [
+            FFMPEG_PATH, "-y",
+            "-i", mp3_path,
+            "-ar", "16000",
+            "-ac", "1",
+            "-b:a", "48k",
+            final_path,
+        ]
+        subprocess.run(cmd, check=True, capture_output=True)
+        os.remove(mp3_path)
+    else:
+        # 本地模式：用 WAV
+        final_path = os.path.join(AUDIO_DIR, f"{video_id}.wav")
+        cmd = [
+            FFMPEG_PATH, "-y",
+            "-i", mp3_path,
+            "-ar", "16000",
+            "-ac", "1",
+            "-sample_fmt", "s16",
+            final_path,
+        ]
+        subprocess.run(cmd, check=True, capture_output=True)
+        os.remove(mp3_path)
 
-    # 删除 mp3，只保留 wav
-    os.remove(mp3_path)
-
-    size_mb = os.path.getsize(wav_path) / 1024 / 1024
-    logger.info(f"Audio downloaded: {wav_path} ({size_mb:.1f} MB)")
-    return wav_path
+    size_mb = os.path.getsize(final_path) / 1024 / 1024
+    logger.info(f"Audio downloaded: {final_path} ({size_mb:.1f} MB)")
+    return final_path
 
 
 def download_frame_at_time(url: str, timestamp: float, video_id: str) -> str:

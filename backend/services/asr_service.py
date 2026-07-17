@@ -1,10 +1,13 @@
 """
 帧知 - ASR语音识别服务
-基于 faster-whisper 实现本地语音转文字
+支持本地 faster-whisper 和 DashScope Paraformer API
 """
 import os
 from loguru import logger
-from backend.config import WHISPER_MODEL_SIZE, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE, FFMPEG_PATH
+from backend.config import (
+    WHISPER_MODEL_SIZE, WHISPER_DEVICE, WHISPER_COMPUTE_TYPE, FFMPEG_PATH,
+    ASR_MODE, SILICONFLOW_API_KEY, SILICONFLOW_BASE_URL,
+)
 
 # 全局模型实例（懒加载）
 _model = None
@@ -51,11 +54,20 @@ def extract_audio(video_path: str, audio_path: str):
     logger.info(f"Audio extracted to {audio_path}")
 
 
-def transcribe(audio_path: str) -> list[dict]:
+async def transcribe(audio_path: str) -> list[dict]:
     """
-    使用 faster-whisper 转录音频
+    转录音频，根据 ASR_MODE 选择本地或 API
+
     返回: [{text, start, end}, ...]
     """
+    if ASR_MODE == "api":
+        return await _transcribe_api(audio_path)
+    else:
+        return _transcribe_local(audio_path)
+
+
+def _transcribe_local(audio_path: str) -> list[dict]:
+    """本地 faster-whisper 转录"""
     model = _get_model()
     segments, info = model.transcribe(audio_path, beam_size=5, language="zh")
     logger.info(f"Detected language: {info.language} (probability: {info.language_probability:.2f})")
@@ -68,8 +80,15 @@ def transcribe(audio_path: str) -> list[dict]:
             "end": round(seg.end, 2),
         })
 
-    logger.info(f"Transcription complete: {len(subtitles)} segments")
+    logger.info(f"Transcription complete (local): {len(subtitles)} segments")
     return subtitles
+
+
+async def _transcribe_api(audio_path: str) -> list[dict]:
+    """硅基流动 SenseVoice API 转录"""
+    from backend.services.asr_api_service import transcribe_api
+    logger.info("Using SiliconFlow SenseVoice ASR API...")
+    return await transcribe_api(audio_path, SILICONFLOW_API_KEY, SILICONFLOW_BASE_URL)
 
 
 async def process_video_to_subtitles(video_path: str, video_hash: str) -> list[dict]:
@@ -92,7 +111,7 @@ async def process_video_to_subtitles(video_path: str, video_hash: str) -> list[d
 
     try:
         extract_audio(video_path, audio_path)
-        subtitles = transcribe(audio_path)
+        subtitles = await transcribe(audio_path)
         save_subtitle_cache(video_hash, subtitles)
         return subtitles
     finally:

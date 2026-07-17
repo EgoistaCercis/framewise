@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from backend.config import (
     UPLOAD_DIR, SUBTITLE_DIR, EMBEDDING_DIR, FRAME_DIR,
     HOST, PORT, DATA_DIR, DEEPSEEK_MODEL, SILICONFLOW_EMBEDDING_MODEL, WHISPER_MODEL_SIZE,
+    ASR_MODE, DASHSCOPE_API_KEY,
 )
 
 # 确保目录存在
@@ -34,7 +35,25 @@ async def startup_event():
     logger.info(f"   数据目录: {os.path.abspath(DATA_DIR)}")
     logger.info(f"   DeepSeek模型: {DEEPSEEK_MODEL}")
     logger.info(f"   Embedding模型: {SILICONFLOW_EMBEDDING_MODEL}")
-    logger.info(f"   Whisper模型: {WHISPER_MODEL_SIZE}")
+    logger.info(f"   ASR模式: {ASR_MODE}")
+
+    # 恢复启动时中断的"处理中"状态 → 标记为 error
+    import asyncio
+    recovered = 0
+    for vid, st in list(video_states.items()):
+        if st.get("status") == "processing":
+            # 检查磁盘缓存是否存在
+            from backend.services.cache_service import embedding_cache_exists
+            if embedding_cache_exists(vid):
+                st["status"] = "ready"
+                logger.info(f"Recovered {vid} from disk cache → ready")
+            else:
+                st["status"] = "error"
+                st["error"] = "服务重启导致处理中断，请重新提交"
+            recovered += 1
+    if recovered:
+        _save_states()
+        logger.info(f"Recovered {recovered} stale states")
 
 # CORS — 允许浏览器插件跨域请求
 app.add_middleware(
@@ -210,13 +229,14 @@ async def process_url(background_tasks: BackgroundTasks, req: dict):
     video_id = hashlib.md5(canonical_id.encode()).hexdigest()[:12]
 
     # 检查内存状态
-    if video_id in video_states and video_states[video_id].get("status") == "ready":
-        logger.info(f"Video already ready (memory): {video_id}")
-        return {
-            "video_id": video_id,
-            "status": "ready",
-            "title": video_states[video_id]["original_name"],
-        }
+    if video_id in video_states:
+        st = video_states[video_id]
+        if st.get("status") == "ready":
+            logger.info(f"Video already ready (memory): {video_id}")
+            return {"video_id": video_id, "status": "ready", "title": st["original_name"]}
+        elif st.get("status") == "error":
+            logger.info(f"Video previously failed, retrying: {video_id}")
+            del video_states[video_id]  # 清除错误状态，重新处理
 
     # 检查磁盘缓存（服务重启后内存清空，但磁盘缓存还在）
     from backend.services.cache_service import embedding_cache_exists, subtitle_cache_exists
@@ -541,10 +561,11 @@ async def _process_video_task(video_id: str):
 
 
 async def _process_url_task(video_id: str, url: str):
-    """后台处理URL视频：下载音频 → ASR → Chunk → Embedding"""
-    from backend.services.url_service import download_audio, cleanup_audio
+    """后台处理URL视频：获取音频直链 → ASR(URL直传) → Chunk → Embedding"""
+    from backend.services.url_service import download_audio, cleanup_audio, get_audio_stream_url
     from backend.services.cache_service import save_subtitle_cache, subtitle_cache_exists, load_subtitle_cache
     from backend.services.asr_service import transcribe
+    from backend.services.asr_api_service import transcribe_via_url
     from backend.services.chunk_service import chunk_subtitles
     from backend.services.embedding_service import embed_texts
     from backend.services.vector_store import build_index
@@ -555,26 +576,43 @@ async def _process_url_task(video_id: str, url: str):
 
     audio_path = None
     try:
-        # 1. 下载音频
-        logger.info(f"[{video_id}] Downloading audio from URL...")
-        audio_path = download_audio(url, video_id)
-
-        # 2. URL模式用video_id作缓存键（同一URL永远同一ID，无需音频hash）
         state["video_hash"] = video_id
 
-        # 3. 检查字幕缓存
+        # 1. 检查字幕缓存
         if subtitle_cache_exists(video_id):
             logger.info(f"[{video_id}] Subtitle cache hit")
             subtitles = load_subtitle_cache(video_id)
         else:
-            logger.info(f"[{video_id}] Starting ASR...")
-            subtitles = transcribe(audio_path)
+            # 2. 优先：获取音频直链 → DashScope 直接处理（秒级）
+            stream_url = get_audio_stream_url(url)
+            if stream_url and DASHSCOPE_API_KEY:
+                import time
+                logger.info(f"[{video_id}] ASR via DashScope URL direct...")
+                t0 = time.time()
+                try:
+                    subtitles = await transcribe_via_url(stream_url, DASHSCOPE_API_KEY)
+                    logger.info(f"[{video_id}] ASR done in {time.time()-t0:.1f}s: {len(subtitles)} segments")
+                except Exception as e:
+                    logger.warning(f"[{video_id}] DashScope URL ASR failed: {e}, trying download+upload...")
+                    # Fallback: 下载音频 → SiliconFlow 上传
+                    audio_path = download_audio(url, video_id)
+                    import time
+                    t0 = time.time()
+                    subtitles = await transcribe(audio_path)
+                    logger.info(f"[{video_id}] ASR done in {time.time()-t0:.1f}s: {len(subtitles)} segments")
+            else:
+                # 无 DashScope Key 或无直链：下载音频 → ASR
+                audio_path = download_audio(url, video_id)
+                import time
+                t0 = time.time()
+                subtitles = await transcribe(audio_path)
+                logger.info(f"[{video_id}] ASR done in {time.time()-t0:.1f}s: {len(subtitles)} segments")
+
             save_subtitle_cache(video_id, subtitles)
 
         state["subtitles"] = subtitles
-        logger.info(f"[{video_id}] ASR done: {len(subtitles)} segments")
 
-        # 4. Chunk + Embedding + FAISS
+        # 3. Chunk + Embedding + FAISS
         chunks = chunk_subtitles(subtitles, video_id)
         state["chunks"] = chunks
 
@@ -584,13 +622,13 @@ async def _process_url_task(video_id: str, url: str):
 
         state["status"] = "ready"
         _save_states()
-        logger.info(f"[{video_id}] URL processing complete! Ready for Q&A.")
+        logger.info(f"[{video_id}] Processing complete! Ready for Q&A.")
 
     except Exception as e:
         state["status"] = "error"
         state["error"] = str(e)
         _save_states()
-        logger.opt(exception=e).error(f"[{video_id}] URL processing failed")
+        logger.opt(exception=e).error(f"[{video_id}] Processing failed")
     finally:
         if audio_path and os.path.exists(audio_path):
             cleanup_audio(video_id)
