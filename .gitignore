@@ -32,6 +32,8 @@ scripts/
 
 # 项目文档
 项目文档/
+*.docx
+~$*.docx
 
 # Claude Code 本地配置
 .claude/
