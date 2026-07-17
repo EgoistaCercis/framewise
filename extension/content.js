@@ -58,7 +58,6 @@
         document.addEventListener("mouseup", function () {
             if (dragState) {
                 if (hasDragged) {
-                    // 提交最终位置
                     var parts = (trigger.style.transform || "").match(/translate3d\(([^,]+)px,\s*([^,]+)px/);
                     if (parts) {
                         trigger.style.left = parts[1] + "px";
@@ -67,12 +66,6 @@
                     trigger.style.transform = "";
                     trigger.style.right = "auto";
                     trigger.style.bottom = "auto";
-                }
-                // 没拖动 = 点击
-                if (!hasDragged) {
-                    var p = document.getElementById("fw-panel");
-                    if (p) p.style.display = "flex";
-                    trigger.style.display = "none";
                 }
                 dragState = null;
             }
@@ -113,17 +106,220 @@
                     trigger.style.right = "auto";
                     trigger.style.bottom = "auto";
                 }
-                if (!hasDragged) {
-                    var p = document.getElementById("fw-panel");
-                    if (p) p.style.display = "flex";
-                    trigger.style.display = "none";
-                }
                 dragState = null;
             }
         });
 
         document.body.appendChild(trigger);
         console.log("[帧知] 浮动按钮已创建");
+
+        // ── 全屏悬浮小窗（可拖拽 mini 窗口） ──
+        var fsPopup = null;
+
+        function createFullscreenPopup() {
+            if (fsPopup) return;
+            fsPopup = document.createElement("div");
+            fsPopup.id = "fw-fs-popup";
+            fsPopup.style.cssText =
+                "display:none;position:absolute;right:12px;top:80px;" +
+                "width:320px;max-height:70vh;background:rgba(22,22,42,0.95);" +
+                "border:1px solid rgba(108,92,231,0.4);border-radius:12px;" +
+                "z-index:2147483646;flex-direction:column;overflow:hidden;" +
+                "font-family:system-ui,'PingFang SC',sans-serif;font-size:13px;color:#e0e0f0;" +
+                "box-shadow:0 8px 32px rgba(0,0,0,0.6);backdrop-filter:blur(8px);";
+            fsPopup.innerHTML =
+                '<div id="fw-fs-header" style="display:flex;align-items:center;padding:10px 14px;' +
+                'border-bottom:1px solid rgba(255,255,255,0.1);cursor:move;user-select:none;">' +
+                '<span style="font-weight:700;pointer-events:none;">🎬 帧知</span>' +
+                '<span id="fw-fs-status" style="flex:1;margin-left:8px;font-size:11px;color:#999;pointer-events:none;"></span>' +
+                '<button id="fw-fs-min" title="缩小" style="background:none;border:none;color:#999;font-size:20px;cursor:pointer;padding:2px 6px;line-height:1;">−</button>' +
+                '<button id="fw-fs-close" title="关闭" style="background:none;border:none;color:#999;font-size:16px;cursor:pointer;">✕</button>' +
+                '</div>' +
+                '<div id="fw-fs-msgs" style="flex:1;overflow-y:auto;padding:8px 12px;max-height:260px;min-height:60px;"></div>' +
+                '<div style="display:flex;gap:6px;padding:8px 12px;border-top:1px solid rgba(255,255,255,0.1);">' +
+                '<input id="fw-fs-input" placeholder="输入问题..." ' +
+                'style="flex:1;padding:8px 10px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);' +
+                'border-radius:6px;color:#e0e0f0;font-size:12px;outline:none;font-family:inherit;">' +
+                '<button id="fw-fs-send" style="padding:8px 14px;background:#6c5ce7;border:none;' +
+                'border-radius:6px;color:#fff;font-weight:600;font-size:12px;cursor:pointer;">发送</button>' +
+                '</div>' +
+                '<div id="fw-fs-resize" style="position:absolute;right:0;bottom:0;width:16px;height:16px;' +
+                'cursor:se-resize;overflow:hidden;" title="拖拽调整大小">' +
+                '<svg viewBox="0 0 16 16" style="width:16px;height:16px;display:block;">' +
+                '<path d="M0 16L16 0v16H0z" fill="rgba(255,255,255,0.2)"/></svg></div>';
+
+            // 关闭按钮
+            // 阻止滚轮事件穿透到视频播放器（B站用滚轮调音量）
+    fsPopup.addEventListener("wheel", function (e) {
+        e.stopPropagation();
+    });
+
+    fsPopup.querySelector("#fw-fs-close").onclick = function () { fsPopup.style.display = "none"; };
+    fsPopup.querySelector("#fw-fs-min").onclick = function () { fsPopup.style.display = "none"; };
+            // 发送按钮
+            fsPopup.querySelector("#fw-fs-send").onclick = sendFullscreenQuestion;
+            fsPopup.querySelector("#fw-fs-input").onkeydown = function (e) {
+                if (e.key === "Enter") sendFullscreenQuestion();
+            };
+
+            // ── 右下角拖拽缩放窗口 ──
+            var resizeHandle = fsPopup.querySelector("#fw-fs-resize");
+            var rsDrag = null, rsRaf = null;
+            resizeHandle.addEventListener("mousedown", function (e) {
+                rsDrag = { sx: e.clientX, sy: e.clientY, w: fsPopup.offsetWidth, h: fsPopup.offsetHeight };
+                e.preventDefault(); e.stopPropagation();
+            });
+            document.addEventListener("mousemove", function (e) {
+                if (!rsDrag || rsRaf) return;
+                rsRaf = requestAnimationFrame(function () {
+                    rsRaf = null;
+                    var w = Math.max(260, Math.min(600, rsDrag.w + (e.clientX - rsDrag.sx)));
+                    var h = Math.max(200, Math.min(window.innerHeight * 0.9, rsDrag.h + (e.clientY - rsDrag.sy)));
+                    fsPopup.style.width = w + "px";
+                    fsPopup.style.maxHeight = h + "px";
+                    var msgs = document.getElementById("fw-fs-msgs");
+                    if (msgs) msgs.style.maxHeight = (h - 120) + "px";
+                });
+            });
+            document.addEventListener("mouseup", function () { rsDrag = null; });
+
+            // ── 拖拽头部移动窗口 ──
+            var fsDrag = null, fsRaf = null, fsHasMoved = false;
+            var fsHeader = fsPopup.querySelector("#fw-fs-header");
+            fsHeader.addEventListener("mousedown", function (e) {
+                if (e.target.tagName === "BUTTON") return;  // 不拦截按钮点击
+                var rect = fsPopup.getBoundingClientRect();
+                fsDrag = { sx: e.clientX, sy: e.clientY, x: rect.left, y: rect.top };
+                fsHasMoved = false;
+                e.preventDefault();
+            });
+            document.addEventListener("mousemove", function (e) {
+                if (!fsDrag || fsRaf) return;
+                fsRaf = requestAnimationFrame(function () {
+                    fsRaf = null;
+                    var dx = e.clientX - fsDrag.sx, dy = e.clientY - fsDrag.sy;
+                    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) fsHasMoved = true;
+                    if (!fsHasMoved) return;
+                    var l = Math.max(0, Math.min(window.innerWidth - 320, fsDrag.x + dx));
+                    var t = Math.max(0, Math.min(window.innerHeight - 100, fsDrag.y + dy));
+                    fsPopup.style.right = "auto";
+                    fsPopup.style.top = "auto";
+                    fsPopup.style.left = l + "px";
+                    fsPopup.style.top = t + "px";
+                });
+            });
+            document.addEventListener("mouseup", function () {
+                fsDrag = null;
+            });
+        }
+
+        function sendFullscreenQuestion() {
+            var inp = document.getElementById("fw-fs-input");
+            var question = (inp ? inp.value : "").trim();
+            if (!question || !window._fwReady) return;
+            inp.disabled = true;
+            inp.value = "";
+            addFullscreenMsg("user", question);
+            var t = getCurrentTime();
+            fetch(API_BASE + "/api/videos/" + videoId + "/ask", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ question: question, timestamp: t }),
+            }).then(function (r) { return r.json(); }).then(function (data) {
+                var html = esc(data.answer);
+                if (data.references && data.references.length > 0) {
+                    html += '<div style="margin-top:6px;font-size:11px;color:#999;">📖 ';
+                    var seen = {};
+                    data.references.forEach(function (ref) {
+                        var key = ref.start_time + "-" + ref.end_time;
+                        if (seen[key]) return; seen[key] = true;
+                        html += '<span style="background:#00d2a0;color:#0f0f1a;padding:1px 6px;' +
+                            'border-radius:3px;font-size:10px;margin:1px;">' +
+                            fmt(ref.start_time) + '~' + fmt(ref.end_time) + '</span> ';
+                    });
+                    html += '</div>';
+                }
+                addFullscreenMsg("assistant", html);
+            }).catch(function (e) {
+                addFullscreenMsg("error", e.message);
+            }).finally(function () {
+                inp.disabled = false;
+            });
+        }
+
+        function addFullscreenMsg(type, content) {
+            var container = document.getElementById("fw-fs-msgs");
+            if (!container) return;
+            var div = document.createElement("div");
+            var color = type === "user" ? "#6c5ce7" : type === "error" ? "#e74c3c" : "rgba(255,255,255,0.06)";
+            div.style.cssText = "padding:8px 10px;border-radius:6px;margin-bottom:6px;font-size:12px;" +
+                "line-height:1.5;word-break:break-word;max-width:100%;background:" + color + ";";
+            div.innerHTML = type === "assistant" ? content : esc(content);
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function syncFullscreenStatus() {
+            var fsStatus = document.getElementById("fw-fs-status");
+            if (fsStatus) fsStatus.textContent = window._fwReady ? "✅ 就绪" : "⏳ 处理中";
+        }
+
+        document.addEventListener("fullscreenchange", function () {
+            if (document.fullscreenElement) {
+                createFullscreenPopup();
+                document.fullscreenElement.appendChild(trigger);
+                document.fullscreenElement.appendChild(fsPopup);
+                // 重置触发按钮到全屏右下角
+                trigger.style.zIndex = "2147483647";
+                trigger.style.left = "auto";
+                trigger.style.top = "auto";
+                trigger.style.transform = "";
+                trigger.style.right = "12px";
+                trigger.style.bottom = "80px";
+                syncFullscreenStatus();
+            } else {
+                document.body.appendChild(trigger);
+                if (fsPopup) {
+                    fsPopup.style.display = "none";
+                    if (fsPopup.parentNode) fsPopup.parentNode.removeChild(fsPopup);
+                }
+            }
+        });
+
+        // 加载历史记录到全屏小窗
+        function loadFullscreenHistory() {
+            if (!videoId) return;
+            fetch(API_BASE + "/api/videos/" + videoId + "/history?limit=20")
+                .then(function (r) { return r.json(); })
+                .then(function (data) {
+                    var container = document.getElementById("fw-fs-msgs");
+                    if (!container || !data || !data.length) return;
+                    container.innerHTML = "";
+                    data.forEach(function (msg) {
+                        if (msg.role === "user") addFullscreenMsg("user", msg.content);
+                        else if (msg.role === "assistant") {
+                            var html = esc(msg.content);
+                            addFullscreenMsg("assistant", html);
+                        }
+                    });
+                }).catch(function () {});
+        }
+
+        trigger.onclick = function () {
+            if (document.fullscreenElement && fsPopup) {
+                syncFullscreenStatus();
+                if (fsPopup.style.display === "flex") {
+                    fsPopup.style.display = "none";
+                } else {
+                    loadFullscreenHistory();
+                    fsPopup.style.display = "flex";
+                }
+            } else {
+                var p = document.getElementById("fw-panel");
+                if (p) p.style.display = "flex";
+                trigger.style.display = "none";
+            }
+        };
     } catch (e) {
         console.error("[帧知] 创建按钮失败:", e);
         return;
