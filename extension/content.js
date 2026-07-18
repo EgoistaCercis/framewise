@@ -146,19 +146,39 @@
     function showMini() {
         if (window._fwReady) loadHistory();
         mini.style.display = "flex";
+        trigger.style.display = "none";
+    }
+
+    function hideMini() {
+        mini.style.display = "none";
+        trigger.style.display = "flex";
     }
 
     trigger.onclick = function () { showMini(); };
 
     // ── 事件 ──
-    document.getElementById("fw-cls").onclick = function () { mini.style.display = "none"; };
-    document.getElementById("fw-min").onclick = function () { mini.style.display = "none"; };
-    document.getElementById("fw-auto").onclick = function () {
-        autoMode = !autoMode;
-        var b = document.getElementById("fw-auto");
-        b.style.background = autoMode ? "#2a2a55" : "rgba(255,255,255,0.06)";
-        b.style.borderColor = autoMode ? "#6c5ce7" : "rgba(255,255,255,0.15)";
-        b.style.color = autoMode ? "#e0e0f0" : "#999";
+    // ── 状态变量（必须在按钮初始化之前） ──
+    var videoId = null, autoMode = localStorage.getItem("fw_auto") !== "false", isProcessing = false;
+    var lastUrl = cleanUrl(location.href);
+    window._fwReady = false;
+
+    document.getElementById("fw-cls").onclick = hideMini;
+    document.getElementById("fw-min").onclick = hideMini;
+    // 自动处理按钮
+    var autoBtn = document.getElementById("fw-auto");
+    function updateAutoBtn(state) {
+        autoMode = state;
+        autoBtn.style.background = state ? "#2a2a55" : "rgba(255,255,255,0.06)";
+        autoBtn.style.borderColor = state ? "#6c5ce7" : "rgba(255,255,255,0.15)";
+        autoBtn.style.color = state ? "#e0e0f0" : "#999";
+    }
+    console.log("[帧知] init autoMode:", autoMode, "autoBtn:", !!autoBtn);
+    updateAutoBtn(autoMode);
+    console.log("[帧知] after updateAutoBtn, bg:", autoBtn.style.background);
+    autoBtn.onclick = function () {
+        updateAutoBtn(!autoMode);
+        localStorage.setItem("fw_auto", autoMode);
+        console.log("[帧知] clicked, saved:", autoMode);
     };
     document.getElementById("fw-proc").onclick = function () {
         if (videoId && window._fwReady) { addMsg("system", "✅ 已处理"); return; }
@@ -210,11 +230,6 @@
     var inp = document.getElementById("fw-input");
     inp.onkeydown = function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendQuestion(); } };
     inp.oninput = function () { inp.style.height = "auto"; inp.style.height = Math.min(inp.scrollHeight, 80) + "px"; };
-
-    // ── 状态变量 ──
-    var videoId = null, autoMode = true, isProcessing = false;
-    var lastUrl = cleanUrl(location.href);
-    window._fwReady = false;
 
     // ── 初始化 ──
     initVideo();
