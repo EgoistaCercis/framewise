@@ -41,10 +41,10 @@
         });
     });
     document.addEventListener("mouseup", function () {
-        if (dragState && hasDragged) {
-            trigger.style.transform = "";
+        if (dragState) {
+            if (!hasDragged) showMini();  // 没拖动 = 点击
+            dragState = null;
         }
-        dragState = null;
     });
 
     // ── 迷你窗口 ──
@@ -153,8 +153,6 @@
         mini.style.display = "none";
         trigger.style.display = "flex";
     }
-
-    trigger.onclick = function () { showMini(); };
 
     // ── 事件 ──
     // ── 状态变量（必须在按钮初始化之前） ──
