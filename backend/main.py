@@ -328,6 +328,8 @@ async def get_video_info(video_id: str):
     return {
         "video_id": video_id,
         "status": state["status"],
+        "progress": state.get("progress", 0),
+        "progress_text": state.get("progress_text", ""),
         "original_name": state["original_name"],
         "chunk_count": len(state.get("chunks", [])) if state.get("chunks") else 0,
         "is_url_mode": state.get("is_url_mode", False),
@@ -577,9 +579,15 @@ async def _process_url_task(video_id: str, url: str):
     if not state:
         return
 
+    def _progress(pct, text):
+        state["progress"] = pct
+        state["progress_text"] = text
+        _save_states()
+
     audio_path = None
     try:
         state["video_hash"] = video_id
+        _progress(5, "获取视频信息...")
 
         # 1. 检查字幕缓存
         if subtitle_cache_exists(video_id):
@@ -588,6 +596,7 @@ async def _process_url_task(video_id: str, url: str):
         else:
             # 2. 获取音频 → ASR
             import time
+            _progress(10, "获取音频流...")
             # 尝试 DashScope URL 直传（仅对可公开访问的 URL 有效）
             stream_url = get_audio_stream_url(url)
             dashscope_ok = False
@@ -604,28 +613,36 @@ async def _process_url_task(video_id: str, url: str):
                     logger.info(f"[{video_id}] DashScope direct failed ({str(e)[:50]}), downloading...")
 
             if not dashscope_ok:
-                # 下载音频 → 上传 API
+                _progress(15, "下载音频中...")
                 t0 = time.time()
                 audio_path = download_audio(url, video_id)
+                _progress(30, "语音识别中...")
                 dt = time.time() - t0
                 logger.info(f"[{video_id}] Audio downloaded in {dt:.0f}s, uploading for ASR...")
                 t0 = time.time()
                 subtitles = await transcribe(audio_path)
                 logger.info(f"[{video_id}] ASR done in {time.time()-t0:.0f}s: {len(subtitles)} segments")
+            else:
+                _progress(30, "语音识别中...")
 
             save_subtitle_cache(video_id, subtitles)
+            _progress(60, "知识索引中...")
 
         state["subtitles"] = subtitles
 
         # 3. Chunk + Embedding + FAISS
         chunks = chunk_subtitles(subtitles, video_id)
         state["chunks"] = chunks
+        _progress(75, "向量化中...")
 
         chunk_texts = [c["text"] for c in chunks]
         embeddings = await embed_texts(chunk_texts, video_id=video_id)
+        _progress(90, "构建索引...")
         build_index(chunks, embeddings, video_id)
 
         state["status"] = "ready"
+        state["progress"] = 100
+        state["progress_text"] = "就绪"
         _save_states()
         logger.info(f"[{video_id}] Processing complete! Ready for Q&A.")
 

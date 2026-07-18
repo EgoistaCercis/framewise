@@ -51,7 +51,7 @@
     var mini = document.createElement("div");
     mini.id = "fw-mini";
     mini.style.cssText = "display:none;position:fixed;right:12px;top:80px;width:340px;" +
-        "min-height:200px;max-height:80vh;background:rgba(22,22,42,0.97);" +
+        "height:400px;min-height:200px;background:rgba(22,22,42,0.97);" +
         "border:1px solid rgba(108,92,231,0.4);border-radius:12px;z-index:2147483646;" +
         "flex-direction:column;overflow:hidden;font:13px system-ui,'PingFang SC',sans-serif;" +
         "color:#e0e0f0;box-shadow:0 8px 32px rgba(0,0,0,0.6);backdrop-filter:blur(8px);";
@@ -121,9 +121,10 @@
                 var w = Math.max(260, Math.min(600, d.w + (e.clientX - d.sx)));
                 var h = Math.max(200, Math.min(window.innerHeight * 0.9, d.h + (e.clientY - d.sy)));
                 mini.style.width = w + "px";
-                mini.style.maxHeight = h + "px";
+                mini.style.height = h + "px";
+                mini.style.maxHeight = "none";
                 var m = document.getElementById("fw-msgs");
-                if (m) m.style.maxHeight = (h - 155) + "px";
+                if (m) m.style.maxHeight = "none";
             });
         });
         document.addEventListener("mouseup", function () { d = null; });
@@ -272,6 +273,7 @@
     // ── 视频处理 ──
     function initVideo() {
         updateStatus("⏳ 建立索引...");
+        updateProgress({progress: 2, progress_text: "连接服务..."});
         fetch(API_BASE + "/api/videos/from_url", {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ url: lastUrl }),
@@ -287,7 +289,8 @@
             fetch(API_BASE + "/api/videos/" + videoId).then(function (r) { return r.json(); }).then(function (data) {
                 if (data.status === "ready") { readyState(data); return; }
                 if (data.status === "error") { updateStatus("❌ 失败"); return; }
-                setTimeout(check, 3000);
+                if (data.progress) updateProgress(data);
+                setTimeout(check, 2000);
             }).catch(function () { setTimeout(check, 5000); });
         })();
     }
@@ -297,7 +300,24 @@
         updateStatus("✅ 就绪 (" + (data.chunk_count||"?") + "片段)");
         document.getElementById("fw-input").disabled = false;
         document.getElementById("fw-send").disabled = false;
+        document.getElementById("fw-msgs").innerHTML =
+            '<div style="color:#00d2a0;text-align:center;padding:20px 0;">✅ 视频已就绪，开始提问吧！</div>';
         loadHistory();
+    }
+
+    function updateProgress(data) {
+        var pct = data.progress || 0;
+        var text = data.progress_text || "处理中...";
+        updateStatus(text + " " + pct + "%");
+        var c = document.getElementById("fw-msgs");
+        if (c) {
+            c.innerHTML =
+                '<div style="text-align:center;padding:20px 0;">' +
+                '<div style="font-size:13px;color:#999;margin-bottom:10px;">' + text + '</div>' +
+                '<div style="background:rgba(255,255,255,0.08);border-radius:10px;height:8px;overflow:hidden;max-width:280px;margin:0 auto;">' +
+                '<div style="background:linear-gradient(90deg,#6c5ce7,#00d2a0);height:100%;width:' + pct + '%;border-radius:10px;transition:width 1s;"></div></div>' +
+                '<div style="font-size:12px;color:#666;margin-top:6px;">' + pct + '%</div></div>';
+        }
     }
 
     function loadHistory() {
