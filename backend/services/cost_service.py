@@ -19,8 +19,8 @@ PRICING = {
     "BAAI/bge-m3":        {"input": 0.0007, "output": 0.0},     # ¥0.7/1M tokens
     # DashScope Qwen VL
     "qwen-vl-plus":       {"input": 0.0015, "output": 0.006},   # ¥1.5/1M input, ¥6/1M output
-    # SiliconFlow SenseVoice ASR
-    "FunAudioLLM/SenseVoiceSmall": {"input": 0.0005, "output": 0.0},  # 约 ¥0.5/1K tokens
+    # SiliconFlow ASR
+    "TeleAI/TeleSpeechASR": {"input": 0.0005, "output": 0.0},  # 约 ¥0.5/1K tokens
     # DashScope Paraformer ASR
     "paraformer-v2":      {"input": 0.0008, "output": 0.0},
     # 默认

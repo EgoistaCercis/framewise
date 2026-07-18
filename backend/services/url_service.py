@@ -92,52 +92,44 @@ def download_audio(url: str, video_id: str) -> str:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Referer": "https://www.bilibili.com/",
         },
-        "postprocessors": [{
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "128",
-        }],
-        "ffmpeg_location": os.path.dirname(FFMPEG_PATH),
     }
-
+    # 不下载完整视频，只下原始音频流
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
 
-    # yt-dlp 输出是 mp3
-    mp3_path = os.path.join(AUDIO_DIR, f"{video_id}.mp3")
-    if not os.path.exists(mp3_path):
-        raise FileNotFoundError(f"Audio download failed, expected: {mp3_path}")
+    # 查找下载的文件（可能是 webm/m4a/opus 等格式）
+    raw_file = None
+    for ext in ["m4a", "webm", "opus", "mp4", "mkv"]:
+        candidate = os.path.join(AUDIO_DIR, f"{video_id}.{ext}")
+        if os.path.exists(candidate):
+            raw_file = candidate
+            break
 
-    # 第二步：转成 16kHz mono（API模式用mp3省带宽，本地模式用wav）
-    if ASR_MODE == "api":
-        # API模式：压缩为低码率 mp3（上传快）
-        final_path = os.path.join(AUDIO_DIR, f"{video_id}_asr.mp3")
-        cmd = [
-            FFMPEG_PATH, "-y",
-            "-i", mp3_path,
-            "-ar", "16000",
-            "-ac", "1",
-            "-b:a", "48k",
-            final_path,
-        ]
-        subprocess.run(cmd, check=True, capture_output=True)
-        os.remove(mp3_path)
-    else:
-        # 本地模式：用 WAV
-        final_path = os.path.join(AUDIO_DIR, f"{video_id}.wav")
-        cmd = [
-            FFMPEG_PATH, "-y",
-            "-i", mp3_path,
-            "-ar", "16000",
-            "-ac", "1",
-            "-sample_fmt", "s16",
-            final_path,
-        ]
-        subprocess.run(cmd, check=True, capture_output=True)
-        os.remove(mp3_path)
+    if not raw_file:
+        raise FileNotFoundError(f"Audio download failed for {video_id}")
+
+    logger.info(f"Raw audio: {raw_file} ({os.path.getsize(raw_file)/1024/1024:.1f} MB)")
+
+    # 转成 mp3 (16kHz mono, 48kbps) — 小体积，API 上传快
+    final_path = os.path.join(AUDIO_DIR, f"{video_id}_asr.mp3")
+    cmd = [
+        FFMPEG_PATH, "-y",
+        "-i", raw_file,
+        "-ar", "16000",
+        "-ac", "1",
+        "-b:a", "48k",
+        final_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.error(f"ffmpeg failed: {result.stderr[:200]}")
+        raise RuntimeError(f"Audio conversion failed: {result.stderr[:100]}")
+
+    # 删除原始文件
+    os.remove(raw_file)
 
     size_mb = os.path.getsize(final_path) / 1024 / 1024
-    logger.info(f"Audio downloaded: {final_path} ({size_mb:.1f} MB)")
+    logger.info(f"Audio ready: {final_path} ({size_mb:.1f} MB)")
     return final_path
 
 

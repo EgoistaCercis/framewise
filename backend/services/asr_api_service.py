@@ -83,7 +83,11 @@ async def transcribe_via_upload(audio_path: str, api_key: str, base_url: str) ->
             mime_map = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4"}
             mime = mime_map.get(ext, "audio/wav")
             files = {"file": (os.path.basename(audio_path), f, mime)}
-            data = {"model": "FunAudioLLM/SenseVoiceSmall", "response_format": "verbose_json"}
+            data = {
+                "model": "TeleAI/TeleSpeechASR",
+                "response_format": "verbose_json",
+                "timestamp_granularities": ["segment"],
+            }
             headers = {"Authorization": f"Bearer {api_key}"}
 
             resp = await client.post(url, files=files, data=data, headers=headers)
@@ -94,15 +98,35 @@ async def transcribe_via_upload(audio_path: str, api_key: str, base_url: str) ->
     for seg in result.get("segments", []):
         text = seg.get("text", "").strip()
         if text:
-            subtitles.append({"text": text, "start": round(seg.get("start", 0), 2), "end": round(seg.get("end", 0), 2)})
+            subtitles.append({
+                "text": text,
+                "start": round(seg.get("start", 0), 2),
+                "end": round(seg.get("end", 0), 2),
+            })
 
     if not subtitles:
         text = result.get("text", "").strip()
         if text:
-            subtitles.append({"text": text, "start": 0, "end": 0})
+            subtitles.append({"text": text, "start": 0, "end": round(len(text) / 5, 2)})
+
+    # 如果 ASR 返回了0时间戳（极少数情况），按字数估算
+    if subtitles and all(s["start"] == 0 and s["end"] == 0 for s in subtitles):
+        import re
+        new_subtitles = []
+        char_per_sec = 5
+        for s in subtitles:
+            for sent in re.split(r'(?<=[。！？；\n\.\!\?;])', s["text"]):
+                sent = sent.strip()
+                if not sent: continue
+                dur = max(1.0, len(sent) / char_per_sec)
+                start = new_subtitles[-1]["end"] if new_subtitles else 0.0
+                new_subtitles.append({"text": sent, "start": round(start, 2), "end": round(start + dur, 2)})
+        if new_subtitles:
+            subtitles = new_subtitles
+            logger.info(f"Fallback: split into {len(subtitles)} sentences")
 
     from backend.services.cost_service import log_usage
-    log_usage(model="FunAudioLLM/SenseVoiceSmall", provider="SiliconFlow",
+    log_usage(model="TeleAI/TeleSpeechASR", provider="SiliconFlow",
               call_type="asr", input_tokens=file_size // 100, output_tokens=0)
 
     logger.info(f"ASR complete via SiliconFlow: {len(subtitles)} segments")

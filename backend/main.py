@@ -489,12 +489,15 @@ async def serve_video(video_id: str):
 
 # ═══════════════════════════════════════════
 def _canonical_video_id(url: str) -> str:
-    """从URL提取规范视频ID，忽略跟踪参数"""
+    """从URL提取规范视频ID，含合集分集"""
     from urllib.parse import urlparse, parse_qs
     import re
     bv = re.search(r'(BV\w+)', url)
     if bv:
-        return f"bilibili:{bv.group(1)}"
+        # 检查是否合集分集 ?p=N 或 &p=N
+        p = re.search(r'[?&]p=(\d+)', url)
+        pid = f"{bv.group(1)}_p{p.group(1)}" if p else bv.group(1)
+        return f"bilibili:{pid}"
     ep = re.search(r'/bangumi/play/(\w+)', url)
     if ep:
         return f"bilibili:ep{ep.group(1)}"
@@ -583,30 +586,32 @@ async def _process_url_task(video_id: str, url: str):
             logger.info(f"[{video_id}] Subtitle cache hit")
             subtitles = load_subtitle_cache(video_id)
         else:
-            # 2. 优先：获取音频直链 → DashScope 直接处理（秒级）
+            # 2. 获取音频 → ASR
+            import time
+            # 尝试 DashScope URL 直传（仅对可公开访问的 URL 有效）
             stream_url = get_audio_stream_url(url)
+            dashscope_ok = False
             if stream_url and DASHSCOPE_API_KEY:
-                import time
-                logger.info(f"[{video_id}] ASR via DashScope URL direct...")
+                logger.info(f"[{video_id}] Trying DashScope URL direct ASR...")
                 t0 = time.time()
                 try:
+                    if "mcdn.bilivideo" in stream_url or "bilivideo.com" in stream_url:
+                        raise Exception("B站CDN URL need auth, skip direct")
                     subtitles = await transcribe_via_url(stream_url, DASHSCOPE_API_KEY)
-                    logger.info(f"[{video_id}] ASR done in {time.time()-t0:.1f}s: {len(subtitles)} segments")
+                    dashscope_ok = True
+                    logger.info(f"[{video_id}] DashScope ASR done in {time.time()-t0:.1f}s")
                 except Exception as e:
-                    logger.warning(f"[{video_id}] DashScope URL ASR failed: {e}, trying download+upload...")
-                    # Fallback: 下载音频 → SiliconFlow 上传
-                    audio_path = download_audio(url, video_id)
-                    import time
-                    t0 = time.time()
-                    subtitles = await transcribe(audio_path)
-                    logger.info(f"[{video_id}] ASR done in {time.time()-t0:.1f}s: {len(subtitles)} segments")
-            else:
-                # 无 DashScope Key 或无直链：下载音频 → ASR
+                    logger.info(f"[{video_id}] DashScope direct failed ({str(e)[:50]}), downloading...")
+
+            if not dashscope_ok:
+                # 下载音频 → 上传 API
+                t0 = time.time()
                 audio_path = download_audio(url, video_id)
-                import time
+                dt = time.time() - t0
+                logger.info(f"[{video_id}] Audio downloaded in {dt:.0f}s, uploading for ASR...")
                 t0 = time.time()
                 subtitles = await transcribe(audio_path)
-                logger.info(f"[{video_id}] ASR done in {time.time()-t0:.1f}s: {len(subtitles)} segments")
+                logger.info(f"[{video_id}] ASR done in {time.time()-t0:.0f}s: {len(subtitles)} segments")
 
             save_subtitle_cache(video_id, subtitles)
 
