@@ -1,6 +1,6 @@
 """
 帧知 - ASR API 服务
-优先用 DashScope Paraformer（支持直接传URL），fallback 到本地文件上传
+通过厂商标配层调用
 """
 import os
 import httpx
@@ -8,149 +8,36 @@ from loguru import logger
 
 
 async def transcribe_via_url(audio_url: str, api_key: str) -> list[dict]:
-    """
-    通过 DashScope Paraformer 直接传入音频 URL（无需下载/上传）
-
-    返回: [{text, start, end}, ...]
-    """
-    import dashscope
-    from dashscope.audio.asr import Transcription
-    from http import HTTPStatus
-
-    dashscope.api_key = api_key
-
-    logger.info(f"Submitting audio URL to DashScope Paraformer...")
-    task = Transcription.async_call(
-        model="paraformer-v2",
-        file_urls=[audio_url],
-        language_hints=["zh", "en"],
-    )
-
-    # 等待完成
-    result = Transcription.wait(task=task.output.task_id)
-    if result.status_code != HTTPStatus.OK:
-        raise Exception(f"ASR failed: {result.code} - {result.message}")
-
-    # 获取转录结果
-    if not (result.output and result.output.get("results")):
-        raise Exception("ASR: no results returned")
-
-    transcript_url = result.output["results"][0]["transcription_url"]
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.get(transcript_url)
-        resp.raise_for_status()
-        transcription = resp.json()
-
-    # 解析
-    subtitles = []
-    for item in transcription.get("transcripts", []):
-        for sent in item.get("sentences", []):
-            text = sent.get("text", "").strip()
-            if text:
-                subtitles.append({
-                    "text": text,
-                    "start": round(sent.get("begin_time", 0) / 1000, 2),
-                    "end": round(sent.get("end_time", 0) / 1000, 2),
-                })
-
-    # 用量统计
-    from backend.services.cost_service import log_usage
-    log_usage(
-        model="paraformer-v2",
-        provider="DashScope",
-        call_type="asr",
-        input_tokens=sum(len(s["text"]) for s in subtitles) // 2,
-        output_tokens=0,
-    )
-
-    logger.info(f"ASR complete via DashScope: {len(subtitles)} segments")
-    return subtitles
+    """DashScope Paraformer URL 直传"""
+    from backend.services.provider_service import call_asr_url
+    return await call_asr_url(audio_url)
 
 
-async def transcribe_via_upload(audio_path: str, api_key: str, base_url: str) -> list[dict]:
-    """
-    Fallback: 硅基流动 SenseVoice（上传本地文件）
+async def transcribe_via_upload(audio_path: str, api_key: str = None, base_url: str = None) -> list[dict]:
+    """本地文件上传 ASR（通过厂商标配层）"""
+    from backend.services.provider_service import call_asr_upload
 
-    返回: [{text, start, end}, ...]
-    """
-    url = f"{base_url}/audio/transcriptions"
     file_size = os.path.getsize(audio_path)
     logger.info(f"Uploading audio for ASR: {file_size / 1024 / 1024:.1f} MB")
+    subtitles = await call_asr_upload(audio_path)
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        with open(audio_path, "rb") as f:
-            ext = os.path.splitext(audio_path)[1].lower()
-            mime_map = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4"}
-            mime = mime_map.get(ext, "audio/wav")
-            files = {"file": (os.path.basename(audio_path), f, mime)}
-            data = {
-                "model": "TeleAI/TeleSpeechASR",
-                "response_format": "verbose_json",
-                "timestamp_granularities": ["segment"],
-            }
-            headers = {"Authorization": f"Bearer {api_key}"}
-
-            resp = await client.post(url, files=files, data=data, headers=headers)
-            resp.raise_for_status()
-            result = resp.json()
-
-    subtitles = []
-    for seg in result.get("segments", []):
-        text = seg.get("text", "").strip()
-        if text:
-            subtitles.append({
-                "text": text,
-                "start": round(seg.get("start", 0), 2),
-                "end": round(seg.get("end", 0), 2),
-            })
-
-    if not subtitles:
-        text = result.get("text", "").strip()
-        if text:
-            subtitles.append({"text": text, "start": 0, "end": round(len(text) / 5, 2)})
-
-    # 如果 ASR 返回了0时间戳（极少数情况），按字数估算
-    if subtitles and all(s["start"] == 0 and s["end"] == 0 for s in subtitles):
-        import re
-        new_subtitles = []
-        char_per_sec = 5
-        for s in subtitles:
-            for sent in re.split(r'(?<=[。！？；\n\.\!\?;])', s["text"]):
-                sent = sent.strip()
-                if not sent: continue
-                dur = max(1.0, len(sent) / char_per_sec)
-                start = new_subtitles[-1]["end"] if new_subtitles else 0.0
-                new_subtitles.append({"text": sent, "start": round(start, 2), "end": round(start + dur, 2)})
-        if new_subtitles:
-            subtitles = new_subtitles
-            logger.info(f"Fallback: split into {len(subtitles)} sentences")
-
+    from backend.services.provider_service import get_provider
+    provider, cfg = get_provider("asr")
     from backend.services.cost_service import log_usage
-    log_usage(model="TeleAI/TeleSpeechASR", provider="SiliconFlow",
-              call_type="asr", input_tokens=file_size // 100, output_tokens=0)
+    log_usage(model=cfg["model"], provider=provider, call_type="asr",
+              input_tokens=file_size // 100, output_tokens=0)
 
-    logger.info(f"ASR complete via SiliconFlow: {len(subtitles)} segments")
+    logger.info(f"ASR complete: {len(subtitles)} segments via {provider}")
     return subtitles
 
 
-async def transcribe_api(audio_path: str, api_key: str, base_url: str = "https://api.siliconflow.cn/v1",
+async def transcribe_api(audio_path: str, api_key: str = None, base_url: str = None,
                          audio_url: str = None, dashscope_key: str = None) -> list[dict]:
-    """
-    统一入口：优先通过 URL 直传 DashScope，失败则用本地文件上传
-
-    参数:
-        audio_path: 本地文件路径（fallback用）
-        api_key: SiliconFlow API Key（fallback用）
-        base_url: SiliconFlow API 地址
-        audio_url: 音频的公网URL（DashScope直传）
-        dashscope_key: DashScope API Key
-    """
-    # 优先：DashScope URL 直传
+    """统一入口：优先 URL 直传 DashScope，失败则上传文件"""
     if audio_url and dashscope_key:
         try:
             return await transcribe_via_url(audio_url, dashscope_key)
         except Exception as e:
             logger.warning(f"DashScope URL ASR failed: {e}, falling back to file upload")
 
-    # Fallback：本地文件上传
     return await transcribe_via_upload(audio_path, api_key, base_url)

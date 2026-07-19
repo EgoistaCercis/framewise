@@ -18,19 +18,50 @@ SUBTITLE_DIR = os.path.join(DATA_DIR, "subtitles")
 EMBEDDING_DIR = os.path.join(DATA_DIR, "embeddings")
 FRAME_DIR = os.path.join(DATA_DIR, "frames")
 
-# DeepSeek API
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+# ═══════════════════════════════════════════
+# API 厂商标配（在 .env 中配置，无需改代码）
+# 格式: {服务}_PROVIDER / {服务}_ENDPOINT / {服务}_API_KEY / {服务}_MODEL / {服务}_FORMAT
+# 新增厂家只需修改 .env 中对应的 _PROVIDER 和 _ENDPOINT
+# ═══════════════════════════════════════════
 
-# 硅基流动 SiliconFlow (Embedding)
-SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "")
-SILICONFLOW_BASE_URL = os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1")
-SILICONFLOW_EMBEDDING_MODEL = os.getenv("SILICONFLOW_EMBEDDING_MODEL", "BAAI/bge-m3")
+# Chat / LLM
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "deepseek")
+LLM_ENDPOINT = os.getenv("LLM_ENDPOINT", "https://api.deepseek.com/v1/chat/completions")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
 
-# 阿里云 DashScope (Vision)
-DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
-DASHSCOPE_VL_MODEL = os.getenv("DASHSCOPE_VL_MODEL", "qwen-vl-plus")
+# Embedding
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "siliconflow")
+EMBEDDING_ENDPOINT = os.getenv("EMBEDDING_ENDPOINT", "https://api.siliconflow.cn/v1/embeddings")
+EMBEDDING_API_KEY = os.getenv("EMBEDDING_API_KEY", "")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
+
+# Vision
+VISION_PROVIDER = os.getenv("VISION_PROVIDER", "dashscope")
+VISION_ENDPOINT = os.getenv("VISION_ENDPOINT", "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation")
+VISION_API_KEY = os.getenv("VISION_API_KEY", "")
+VISION_MODEL = os.getenv("VISION_MODEL", "qwen-vl-plus")
+VISION_FORMAT = os.getenv("VISION_FORMAT", "dashscope_vision")
+
+# ASR
+ASR_PROVIDER = os.getenv("ASR_PROVIDER", "siliconflow")
+ASR_ENDPOINT = os.getenv("ASR_ENDPOINT", "https://api.siliconflow.cn/v1/audio/transcriptions")
+ASR_API_KEY = os.getenv("ASR_API_KEY", "")
+ASR_MODEL_ASR = os.getenv("ASR_MODEL", "TeleAI/TeleSpeechASR")
+
+# ASR URL 直传 (DashScope Paraformer)
+ASR_URL_PROVIDER = os.getenv("ASR_URL_PROVIDER", "dashscope")
+ASR_URL_API_KEY = os.getenv("ASR_URL_API_KEY", "")
+
+# 向后兼容旧变量名
+DEEPSEEK_API_KEY = LLM_API_KEY
+DEEPSEEK_BASE_URL = os.path.dirname(LLM_ENDPOINT.rstrip("/v1/chat/completions"))
+DEEPSEEK_MODEL = LLM_MODEL
+SILICONFLOW_API_KEY = EMBEDDING_API_KEY
+SILICONFLOW_BASE_URL = os.path.dirname(EMBEDDING_ENDPOINT.rstrip("/embeddings"))
+SILICONFLOW_EMBEDDING_MODEL = EMBEDDING_MODEL
+DASHSCOPE_API_KEY = VISION_API_KEY or ASR_URL_API_KEY
+DASHSCOPE_VL_MODEL = VISION_MODEL
 
 # 服务配置
 HOST = os.getenv("HOST", "0.0.0.0")

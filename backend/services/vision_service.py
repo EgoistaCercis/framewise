@@ -44,69 +44,28 @@ async def extract_frame(video_path: str, timestamp: float, video_hash: str) -> s
 
 
 async def analyze_frame(frame_path: str, video_id: str = None) -> str:
-    """
-    使用 Qwen VL 分析帧内容
+    """使用视觉模型分析帧内容（通过厂商标配层）"""
+    import base64
+    from backend.services.provider_service import call_vision, get_provider
+    from backend.services.cost_service import log_usage
 
-    参数:
-        frame_path: 帧图片路径
-        video_id: 关联的视频ID（用于统计）
-
-    返回: 画面描述文本
-    """
-    # 读取图片并转base64
     with open(frame_path, "rb") as f:
         image_data = base64.b64encode(f.read()).decode("utf-8")
 
-    # 调用 DashScope Qwen VL API
-    url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
-    headers = {
-        "Authorization": f"Bearer {DASHSCOPE_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": DASHSCOPE_VL_MODEL,
-        "input": {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"image": f"data:image/jpeg;base64,{image_data}"},
-                        {"text": "请详细描述这张图片/视频帧中的内容。包括：文字、图表、公式、代码、UI界面、人物动作等所有可见元素。如果是PPT或教学视频，描述幻灯片内容。"},
-                    ],
-                }
-            ]
-        },
-        "parameters": {
-            "max_tokens": 500,
-        },
-    }
+    provider, cfg = get_provider("vision")
+    description, usage = await call_vision(image_data)
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(url, json=payload, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
+    log_usage(
+        model=cfg["model"],
+        provider=provider,
+        call_type="vision",
+        input_tokens=usage.get("input_tokens", 0),
+        output_tokens=usage.get("output_tokens", 0),
+        video_id=video_id,
+    )
 
-        # 记录 token 用量
-        usage = data.get("usage", {})
-        from backend.services.cost_service import log_usage
-        log_usage(
-            model=DASHSCOPE_VL_MODEL,
-            provider="DashScope",
-            call_type="vision",
-            input_tokens=usage.get("input_tokens", 0),
-            output_tokens=usage.get("output_tokens", 0),
-            video_id=video_id,
-        )
-
-        description = data["output"]["choices"][0]["message"]["content"]
-        # 清理base64前缀（API有时会返回）
-        if isinstance(description, list):
-            description = " ".join(
-                item.get("text", "") if isinstance(item, dict) else str(item)
-                for item in description
-            )
-        logger.info(f"Frame analyzed: {description[:100]}...")
-        return description
+    logger.info(f"Frame analyzed: {description[:100]}...")
+    return description
 
 
 async def process_frame_question(

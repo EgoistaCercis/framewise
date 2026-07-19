@@ -264,40 +264,24 @@ async def _get_conversation_context(video_id: str) -> str:
 
 
 async def _call_deepseek(user_prompt: str, video_id: str = None, system_prompt: str = None) -> str:
-    """调用 DeepSeek API，并记录 token 用量"""
+    """调用 LLM（通过厂商标配层），并记录 token 用量"""
     from backend.services.cost_service import log_usage
+    from backend.services.provider_service import call_chat, get_provider
 
-    url = f"{DEEPSEEK_BASE_URL}/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": DEEPSEEK_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt or SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": 0.7,
-        "max_tokens": 1024,
-    }
+    provider, cfg = get_provider("chat")
+    answer, usage = await call_chat(
+        messages=[{"role": "user", "content": user_prompt}],
+        system_prompt=system_prompt or SYSTEM_PROMPT,
+    )
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(url, json=payload, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-        answer = data["choices"][0]["message"]["content"]
+    log_usage(
+        model=cfg["model"],
+        provider=provider,
+        call_type="chat",
+        input_tokens=usage.get("prompt_tokens", 0),
+        output_tokens=usage.get("completion_tokens", 0),
+        video_id=video_id,
+    )
 
-        # 记录用量
-        usage = data.get("usage", {})
-        log_usage(
-            model=DEEPSEEK_MODEL,
-            provider="DeepSeek",
-            call_type="chat",
-            input_tokens=usage.get("prompt_tokens", 0),
-            output_tokens=usage.get("completion_tokens", 0),
-            video_id=video_id,
-        )
-
-        logger.debug(f"DeepSeek answer: {answer[:100]}...")
-        return answer
+    logger.debug(f"LLM answer: {answer[:100]}...")
+    return answer
