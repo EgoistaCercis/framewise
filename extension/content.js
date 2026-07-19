@@ -61,7 +61,7 @@
         '<span id="fw-status" style="flex:1;margin-left:8px;font-size:11px;color:#999;pointer-events:none;"></span>' +
         '<button id="fw-hist" title="历史" style="background:none;border:1px solid rgba(255,255,255,0.15);color:#999;font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:3px;">📋</button>' +
         '<button id="fw-auto" title="自动处理" style="background:#2a2a55;border:1px solid #6c5ce7;color:#e0e0f0;font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:3px;">🤖</button>' +
-        '<button id="fw-proc" title="重新处理" style="background:none;border:1px solid rgba(255,255,255,0.15);color:#999;font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:3px;">🔄</button>' +
+        '<button id="fw-proc" title="手动处理" style="background:none;border:1px solid rgba(255,255,255,0.15);color:#999;font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:3px;">🔄</button>' +
         '<button id="fw-quiz" title="考考我" style="background:none;border:1px solid rgba(255,255,255,0.15);color:#999;font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:3px;">❓</button>' +
         '<button id="fw-min" title="缩小" style="background:none;border:none;color:#999;font-size:18px;cursor:pointer;padding:2px 6px;line-height:1;">−</button>' +
         '<button id="fw-cls" title="关闭" style="background:none;border:none;color:#999;font-size:14px;cursor:pointer;">✕</button>' +
@@ -179,10 +179,12 @@
         console.log("[帧知] clicked, saved:", autoMode);
     };
     document.getElementById("fw-proc").onclick = function () {
-        if (videoId && window._fwReady) { addMsg("system", "✅ 已处理"); return; }
-        videoId = null; window._fwReady = false; updateStatus("⏳ 处理中...");
+        videoId = null; window._fwReady = false;
+        updateStatus("⏳ 手动处理...");
         document.getElementById("fw-input").disabled = true;
         document.getElementById("fw-send").disabled = true;
+        document.getElementById("fw-msgs").innerHTML = "";
+        lastUrl = cleanUrl(location.href);
         initVideo();
     };
     document.getElementById("fw-quiz").onclick = function () {

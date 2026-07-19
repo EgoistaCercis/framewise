@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  framewise:
+    build: .
+    container_name: framewise
+    ports:
+      - "8000:8000"
+    volumes:
+      # 持久化数据目录（字幕、索引、对话记录不会因容器重启丢失）
+      - ./data:/app/data
+      # 配置文件（API Key 等）
+      - ./.env:/app/.env
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai

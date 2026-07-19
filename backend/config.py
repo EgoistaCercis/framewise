@@ -4,7 +4,7 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 # Hugging Face 镜像（国内加速，需在 import faster_whisper 前设置）
 if os.getenv("HF_ENDPOINT"):

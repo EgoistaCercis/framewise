@@ -1,0 +1,12 @@
+data/
+.git/
+项目文档/
+scripts/
+extension/*.png
+*.docx
+~$*.docx
+__pycache__/
+.venv/
+*.pyc
+.agents/
+.claude/
