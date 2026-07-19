@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   framewise:
     build: .
@@ -12,5 +10,9 @@ services:
       # 配置文件（API Key 等）
       - ./.env:/app/.env
     restart: unless-stopped
+    dns:
+      - 114.114.114.114
+      - 8.8.8.8
     environment:
       - TZ=Asia/Shanghai
+      - FFMPEG_PATH=ffmpeg

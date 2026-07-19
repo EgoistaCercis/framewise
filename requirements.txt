@@ -1,12 +1,24 @@
 # 帧知 - 多模态RAG视频学习Agent
-faster-whisper>=1.0.0
-faiss-cpu>=1.7.4
+# 核心框架
 fastapi>=0.100.0
 uvicorn[standard]>=0.23.0
+pydantic>=2.0.0
 python-multipart>=0.0.6
-python-dotenv>=1.0.0
+
+# API 调用
 httpx>=0.25.0
+python-dotenv>=1.0.0
 dashscope>=1.20.0
-aiofiles>=23.2.0
+
+# ASR（本地模式可选，API模式不需要）
+faster-whisper>=1.0.0
+
+# 视频处理
+yt-dlp>=2024.0.0
+
+# 向量检索
+faiss-cpu>=1.7.4
 numpy>=1.24.0
-opencv-python>=4.8.0
+
+# 日志
+loguru>=0.7.0

@@ -79,8 +79,9 @@ WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "auto")
 CHUNK_MAX_LENGTH = int(os.getenv("CHUNK_MAX_LENGTH", "300"))  # 每chunk最大字符数
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "50"))  # chunk重叠字符数
 
-# ffmpeg 路径
-FFMPEG_PATH = os.getenv("FFMPEG_PATH", "ffmpeg")
+# ffmpeg 路径（Windows 需完整路径，Linux/Docker 用 "ffmpeg"）
+_ffmpeg_env = os.getenv("FFMPEG_PATH", "ffmpeg")
+FFMPEG_PATH = _ffmpeg_env if os.path.exists(_ffmpeg_env) or _ffmpeg_env == "ffmpeg" else "ffmpeg"
 
 # RAG 配置
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))  # 检索返回的chunk数量
