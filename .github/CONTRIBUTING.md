@@ -50,7 +50,6 @@ chore: 构建/工具链
 | `backend/services/` | 核心业务逻辑 |
 | `extension/` | Chrome 插件 |
 | `frontend/` | Web 前端 |
-| `项目文档/` | 计划书、设计文档（不上传 git） |
 
 ## 问题反馈
 
