@@ -42,7 +42,7 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
 
 ### 处理本地视频
 
-浏览器打开 http://localhost:8000，可处理本地视频
+浏览器打开 `http://localhost:8000`，可处理本地视频
 
 ### Chrome 插件
 
