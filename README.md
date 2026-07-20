@@ -63,7 +63,8 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
 详见 `.env.example` 中的完整注释。
 
 ## 使用样例
-docs/images/exapmle.png
+
+![示例](docs/images/example.png)
 
 ## 🏗️ 架构
 
