@@ -301,6 +301,7 @@
 
     function pollStatus() {
         (function check() {
+            if (!videoId) { setTimeout(check, 3000); return; }
             fetch(API_BASE + "/api/videos/" + videoId).then(function (r) { return r.json(); }).then(function (data) {
                 if (data.status === "ready") { readyState(data); return; }
                 if (data.status === "error") { updateStatus("❌ 失败"); return; }
@@ -348,6 +349,7 @@
 
     // ── 发送问题 ──
     function sendQuestion() {
+        if (!videoId) return;
         var inp = document.getElementById("fw-input"), q = inp.value.trim();
         if (!q || !window._fwReady || isProcessing) return;
         isProcessing = true; inp.disabled = true; document.getElementById("fw-send").disabled = true; inp.value = ""; inp.style.height = "auto";
