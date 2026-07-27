@@ -232,7 +232,11 @@
     inp.oninput = function () { inp.style.height = "auto"; inp.style.height = Math.min(inp.scrollHeight, 80) + "px"; };
 
     // ── 初始化 ──
-    initVideo();
+    if (autoMode) {
+        initVideo();
+    } else {
+        addMsg("system", "自动处理已关闭，点击 🔄 按钮手动处理");
+    }
 
     // ── 辅助函数 ──
     function cleanUrl(url) {
