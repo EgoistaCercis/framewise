@@ -21,4 +21,4 @@ faiss-cpu>=1.7.4
 numpy>=1.24.0
 
 # 日志
-loguru>=0.7.0
+loguru>=0.7.3
