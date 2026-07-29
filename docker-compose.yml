@@ -9,6 +9,8 @@ services:
       - ./data:/app/data
       # 配置文件（API Key 等）
       - ./.env:/app/.env
+      # 后端代码（修改自动重启）
+      - ./backend:/app/backend
     restart: unless-stopped
     dns:
       - 114.114.114.114

@@ -232,7 +232,11 @@
     inp.oninput = function () { inp.style.height = "auto"; inp.style.height = Math.min(inp.scrollHeight, 80) + "px"; };
 
     // ── 初始化 ──
-    initVideo();
+    if (autoMode) {
+        initVideo();
+    } else {
+        addMsg("system", "自动处理已关闭，点击 🔄 按钮手动处理");
+    }
 
     // ── 辅助函数 ──
     function cleanUrl(url) {
@@ -301,6 +305,7 @@
 
     function pollStatus() {
         (function check() {
+            if (!videoId) { setTimeout(check, 3000); return; }
             fetch(API_BASE + "/api/videos/" + videoId).then(function (r) { return r.json(); }).then(function (data) {
                 if (data.status === "ready") { readyState(data); return; }
                 if (data.status === "error") { updateStatus("❌ 失败"); return; }
@@ -348,6 +353,7 @@
 
     // ── 发送问题 ──
     function sendQuestion() {
+        if (!videoId) return;
         var inp = document.getElementById("fw-input"), q = inp.value.trim();
         if (!q || !window._fwReady || isProcessing) return;
         isProcessing = true; inp.disabled = true; document.getElementById("fw-send").disabled = true; inp.value = ""; inp.style.height = "auto";

@@ -95,12 +95,14 @@ async def call_chat(messages: list[dict], system_prompt: str = None,
         "Authorization": f"Bearer {cfg['api_key']}",
         "Content-Type": "application/json",
     }
+    msgs = []
+    if system_prompt:
+        msgs.append({"role": "system", "content": system_prompt})
+    msgs.extend(messages)
+
     payload = {
         "model": cfg["model"],
-        "messages": [
-            {"role": "system", "content": system_prompt or ""},
-            *messages,
-        ],
+        "messages": msgs,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
@@ -231,8 +233,15 @@ async def call_asr_upload(audio_path: str, provider: str = None) -> list[dict]:
         if text:
             subtitles.append({"text": text, "start": 0, "end": round(len(text) / 5, 2)})
 
-    # 全0时间戳兜底
-    if subtitles and all(s["start"] == 0 and s["end"] == 0 for s in subtitles):
+    # 全0时间戳 或 只有1段且时长>60秒 → 按句子拆分
+    need_split = all(s["start"] == 0 and s["end"] == 0 for s in subtitles)
+    if not need_split and len(subtitles) <= 2:
+        # 单段文本覆盖整个视频 → 也拆
+        for s in subtitles:
+            if s["end"] - s["start"] > 60 or s["end"] == 0:
+                need_split = True
+                break
+    if need_split:
         import re
         new_subtitles = []
         for s in subtitles:

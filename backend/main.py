@@ -364,12 +364,18 @@ async def ask_question(video_id: str, req: AskRequest):
     if state["status"] != "ready":
         raise HTTPException(400, f"视频尚未处理完成，当前状态: {state['status']}")
 
-    logger.info(f"[{video_id}] 文本提问: {req.question[:50]}...")
-    result = await answer_text_question(
-        video_hash=state["video_hash"],
-        question=req.question,
-        video_id=video_id,
-    )
+    try:
+        result = await answer_text_question(
+            video_hash=state["video_hash"],
+            question=req.question,
+            video_id=video_id,
+        )
+    except FileNotFoundError:
+        # FAISS 索引丢失（清理缓存导致），标记为需重新处理
+        state["status"] = "error"
+        state["error"] = "索引文件丢失，请点击🔄按钮重新处理"
+        _save_states()
+        raise HTTPException(410, "索引丢失，请重新处理该视频")
 
     # 保存对话记录
     from backend.services.conversation_service import save_exchange

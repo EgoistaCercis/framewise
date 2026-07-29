@@ -28,7 +28,7 @@ FRAME_DIR = os.path.join(DATA_DIR, "frames")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "deepseek")
 LLM_ENDPOINT = os.getenv("LLM_ENDPOINT", "https://api.deepseek.com/v1/chat/completions")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
+LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-v4-pro")
 
 # Embedding
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "siliconflow")
@@ -47,7 +47,7 @@ VISION_FORMAT = os.getenv("VISION_FORMAT", "dashscope_vision")
 ASR_PROVIDER = os.getenv("ASR_PROVIDER", "siliconflow")
 ASR_ENDPOINT = os.getenv("ASR_ENDPOINT", "https://api.siliconflow.cn/v1/audio/transcriptions")
 ASR_API_KEY = os.getenv("ASR_API_KEY", "")
-ASR_MODEL_ASR = os.getenv("ASR_MODEL", "TeleAI/TeleSpeechASR")
+ASR_MODEL_ASR = os.getenv("ASR_MODEL", "FunAudioLLM/SenseVoiceSmall")
 
 # ASR URL 直传 (DashScope Paraformer)
 ASR_URL_PROVIDER = os.getenv("ASR_URL_PROVIDER", "dashscope")
