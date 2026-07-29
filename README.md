@@ -46,9 +46,17 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
 
 ### Chrome 插件
 
+**方式一：源码安装（开发者）**
+
 1. 打开 `chrome://extensions/`，开启右上角**开发者模式**
-2. 点击**加载已解压的扩展程序**，选择 `extension/` 目录
+2. 点击**加载已解压的扩展程序**，选择项目的 `extension/` 目录
 3. 打开 B站/YouTube 视频，右侧出现 🎬 悬浮按钮即可使用
+
+**方式二：Zip 安装（普通用户）**
+
+1. 从 [GitHub Releases](https://github.com/EgoistaCercis/framewise/releases) 下载 `framewise-extension.zip`
+2. 解压到任意文件夹
+3. `chrome://extensions/` → 加载已解压的扩展程序 → 选择解压后的文件夹
 
 ### 配置 API Key
 

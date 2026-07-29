@@ -206,17 +206,33 @@ async def call_asr_upload(audio_path: str, provider: str = None) -> list[dict]:
     mime_map = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4"}
     mime = mime_map.get(ext, "audio/wav")
 
-    async with httpx.AsyncClient(timeout=300.0) as client:
-        with open(audio_path, "rb") as f:
-            files = {"file": (os.path.basename(audio_path), f, mime)}
-            data = {
-                "model": cfg["model"],
-                "response_format": "verbose_json",
-                "timestamp_granularities": ["segment"],
-            }
-            resp = await client.post(cfg["endpoint"], files=files, data=data, headers=headers)
-            resp.raise_for_status()
-            result = resp.json()
+    # 带重试的上传（ASR API 偶发不稳定）
+    last_error = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                with open(audio_path, "rb") as f:
+                    files = {"file": (os.path.basename(audio_path), f, mime)}
+                    data = {
+                        "model": cfg["model"],
+                        "response_format": "verbose_json",
+                        "timestamp_granularities": ["segment"],
+                    }
+                    resp = await client.post(cfg["endpoint"], files=files, data=data, headers=headers)
+                    resp.raise_for_status()
+                    result = resp.json()
+                    break  # 成功，跳出重试循环
+        except httpx.HTTPStatusError as e:
+            last_error = e
+            if e.response.status_code >= 500:
+                wait = (attempt + 1) * 5
+                logger.warning(f"ASR attempt {attempt+1}/3 failed (500), retrying in {wait}s...")
+                import asyncio
+                await asyncio.sleep(wait)
+            else:
+                raise  # 非服务端错误，不重试
+    else:
+        raise last_error
 
     subtitles = []
     for seg in result.get("segments", []):
