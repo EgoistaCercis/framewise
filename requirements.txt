@@ -7,7 +7,7 @@ python-multipart>=0.0.6
 
 # API 调用
 httpx>=0.25.0
-python-dotenv>=1.0.0
+python-dotenv>=1.2.2
 dashscope>=1.20.0
 
 # ASR（本地模式可选，API模式不需要）
