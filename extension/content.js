@@ -1,6 +1,6 @@
 /**
- * 帧知 - 浏览器插件 v2
- * 统一迷你浮动窗口 + 悬浮按钮，正常/全屏模式共用
+ * 帧知 - 浏览器插件 v3
+ * 统一迷你浮动窗口 + 悬浮按钮 + 后台ServiceWorker字幕拦截
  */
 (function () {
     "use strict";
@@ -41,10 +41,8 @@
         });
     });
     document.addEventListener("mouseup", function () {
-        if (dragState) {
-            if (!hasDragged) showMini();  // 没拖动 = 点击
-            dragState = null;
-        }
+        if (dragState && !hasDragged) showMini();
+        dragState = null;
     });
 
     // ── 迷你窗口 ──
@@ -78,327 +76,118 @@
         '<div id="fw-rsz" style="position:absolute;right:0;bottom:0;width:14px;height:14px;cursor:se-resize;overflow:hidden;">' +
         '<svg viewBox="0 0 16 16" style="width:14px;height:14px;display:block;"><path d="M0 16L16 0v16H0z" fill="rgba(255,255,255,0.2)"/></svg></div>';
     document.body.appendChild(mini);
-
-    // 滚轮不穿透
     mini.addEventListener("wheel", function (e) { e.stopPropagation(); });
 
-    // ── 窗口拖拽 ──
-    (function () {
-        var d = null, r = null, m = false;
-        document.getElementById("fw-head").addEventListener("mousedown", function (e) {
-            if (e.target.tagName === "BUTTON") return;
-            var rect = mini.getBoundingClientRect();
-            d = { sx: e.clientX, sy: e.clientY, x: rect.left, y: rect.top };
-            m = false; e.preventDefault();
-        });
-        document.addEventListener("mousemove", function (e) {
-            if (!d || r) return;
-            r = requestAnimationFrame(function () {
-                r = null;
-                var dx = e.clientX - d.sx, dy = e.clientY - d.sy;
-                if (Math.abs(dx) > 2 || Math.abs(dy) > 2) m = true;
-                if (!m) return;
-                var l = Math.max(0, Math.min(window.innerWidth - 340, d.x + dx));
-                var t = Math.max(0, Math.min(window.innerHeight - 100, d.y + dy));
-                mini.style.right = "auto"; mini.style.top = "auto";
-                mini.style.left = l + "px"; mini.style.top = t + "px";
-            });
-        });
-        document.addEventListener("mouseup", function () { d = null; });
-    })();
-
-    // ── 窗口缩放 ──
-    (function () {
-        var d = null, r = null;
-        document.getElementById("fw-rsz").addEventListener("mousedown", function (e) {
-            d = { sx: e.clientX, sy: e.clientY, w: mini.offsetWidth, h: mini.offsetHeight };
-            e.preventDefault(); e.stopPropagation();
-        });
-        document.addEventListener("mousemove", function (e) {
-            if (!d || r) return;
-            r = requestAnimationFrame(function () {
-                r = null;
-                var w = Math.max(260, Math.min(600, d.w + (e.clientX - d.sx)));
-                var h = Math.max(200, Math.min(window.innerHeight * 0.9, d.h + (e.clientY - d.sy)));
-                mini.style.width = w + "px";
-                mini.style.height = h + "px";
-                mini.style.maxHeight = "none";
-                var m = document.getElementById("fw-msgs");
-                if (m) m.style.maxHeight = "none";
-            });
-        });
-        document.addEventListener("mouseup", function () { d = null; });
-    })();
+    // ── 窗口拖拽 + 缩放 ──
+    (function () { var d = null, r = null, m = false; document.getElementById("fw-head").addEventListener("mousedown", function (e) { if (e.target.tagName === "BUTTON") return; var rect = mini.getBoundingClientRect(); d = { sx: e.clientX, sy: e.clientY, x: rect.left, y: rect.top }; m = false; e.preventDefault(); }); document.addEventListener("mousemove", function (e) { if (!d || r) return; r = requestAnimationFrame(function () { r = null; var dx = e.clientX - d.sx, dy = e.clientY - d.sy; if (Math.abs(dx) > 2 || Math.abs(dy) > 2) m = true; if (!m) return; var l = Math.max(0, Math.min(window.innerWidth - 340, d.x + dx)); var t = Math.max(0, Math.min(window.innerHeight - 100, d.y + dy)); mini.style.right = "auto"; mini.style.top = "auto"; mini.style.left = l + "px"; mini.style.top = t + "px"; }); }); document.addEventListener("mouseup", function () { d = null; }); })();
+    (function () { var d = null, r = null; document.getElementById("fw-rsz").addEventListener("mousedown", function (e) { d = { sx: e.clientX, sy: e.clientY, w: mini.offsetWidth, h: mini.offsetHeight }; e.preventDefault(); e.stopPropagation(); }); document.addEventListener("mousemove", function (e) { if (!d || r) return; r = requestAnimationFrame(function () { r = null; var w = Math.max(260, Math.min(600, d.w + (e.clientX - d.sx))); var h = Math.max(200, Math.min(window.innerHeight * 0.9, d.h + (e.clientY - d.sy))); mini.style.width = w + "px"; mini.style.height = h + "px"; mini.style.maxHeight = "none"; var m = document.getElementById("fw-msgs"); if (m) m.style.maxHeight = "none"; }); }); document.addEventListener("mouseup", function () { d = null; }); })();
 
     // ── 全屏处理 ──
     document.addEventListener("fullscreenchange", function () {
-        if (document.fullscreenElement) {
-            document.fullscreenElement.appendChild(trigger);
-            document.fullscreenElement.appendChild(mini);
-            trigger.style.right = "12px"; trigger.style.bottom = "80px";
-            trigger.style.left = "auto"; trigger.style.top = "auto";
-        } else {
-            document.body.appendChild(trigger);
-            if (mini.parentNode !== document.body) document.body.appendChild(mini);
-        }
+        if (document.fullscreenElement) { document.fullscreenElement.appendChild(trigger); document.fullscreenElement.appendChild(mini); trigger.style.right = "12px"; trigger.style.bottom = "80px"; trigger.style.left = "auto"; trigger.style.top = "auto"; }
+        else { document.body.appendChild(trigger); if (mini.parentNode !== document.body) document.body.appendChild(mini); }
     });
 
-    function showMini() {
-        if (window._fwReady) loadHistory();
-        mini.style.display = "flex";
-        trigger.style.display = "none";
-    }
+    function showMini() { if (window._fwReady) { loadHistory(); } else { var c = document.getElementById("fw-msgs"); if (c && !c.innerHTML.trim()) c.innerHTML = '<div style="text-align:center;padding:30px 20px;color:#999;font-size:12px;line-height:2;">💡 点击播放器的 <b style="color:#00a1d6;">AI字幕</b>，获取精准回答</div>'; } mini.style.display = "flex"; trigger.style.display = "none"; }
+    function hideMini() { mini.style.display = "none"; trigger.style.display = "flex"; }
 
-    function hideMini() {
-        mini.style.display = "none";
-        trigger.style.display = "flex";
-    }
-
-    // ── 事件 ──
-    // ── 状态变量（必须在按钮初始化之前） ──
-    var videoId = null, autoMode = localStorage.getItem("fw_auto") !== "false", isProcessing = false;
-    var lastUrl = cleanUrl(location.href);
-    window._fwReady = false;
-
+    // ── 事件绑定 ──
     document.getElementById("fw-cls").onclick = hideMini;
     document.getElementById("fw-min").onclick = hideMini;
-    // 自动处理按钮
     var autoBtn = document.getElementById("fw-auto");
-    function updateAutoBtn(state) {
-        autoMode = state;
-        autoBtn.style.background = state ? "#2a2a55" : "rgba(255,255,255,0.06)";
-        autoBtn.style.borderColor = state ? "#6c5ce7" : "rgba(255,255,255,0.15)";
-        autoBtn.style.color = state ? "#e0e0f0" : "#999";
-    }
-    console.log("[帧知] init autoMode:", autoMode, "autoBtn:", !!autoBtn);
+    function updateAutoBtn(state) { autoMode = state; autoBtn.style.background = state ? "#2a2a55" : "rgba(255,255,255,0.06)"; autoBtn.style.borderColor = state ? "#6c5ce7" : "rgba(255,255,255,0.15)"; autoBtn.style.color = state ? "#e0e0f0" : "#999"; }
     updateAutoBtn(autoMode);
-    console.log("[帧知] after updateAutoBtn, bg:", autoBtn.style.background);
-    autoBtn.onclick = function () {
-        updateAutoBtn(!autoMode);
-        localStorage.setItem("fw_auto", autoMode);
-        console.log("[帧知] clicked, saved:", autoMode);
-    };
-    document.getElementById("fw-proc").onclick = function () {
-        videoId = null; window._fwReady = false;
-        updateStatus("⏳ 手动处理...");
-        document.getElementById("fw-input").disabled = true;
-        document.getElementById("fw-send").disabled = true;
-        document.getElementById("fw-msgs").innerHTML = "";
-        lastUrl = cleanUrl(location.href);
-        initVideo();
-    };
-    document.getElementById("fw-quiz").onclick = function () {
-        if (!window._fwReady) { addMsg("system", "⏳ 等待就绪"); return; }
-        addMsg("system", "🤔 出题中...");
-        fetch(API_BASE + "/api/videos/" + videoId + "/quiz", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ timestamp: getCurrentTime() }),
-        }).then(function (r) { return r.json(); }).then(function (data) {
-            var h = '<b>📝 小测验 (' + data.context_time + ')：</b><br><br>';
-            data.questions.forEach(function (q, i) {
-                h += '<div style="margin-bottom:8px;"><b>' + (i+1) + '. ' + esc(q.question) + '</b>';
-                h += '<div style="margin-top:3px;cursor:pointer;color:#00d2a0;font-size:11px;" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==\'block\'?\'none\':\'block\'">💡 查看答案</div>';
-                h += '<div style="display:none;background:#1a1a2e;padding:6px 10px;border-radius:4px;margin-top:3px;font-size:12px;border-left:3px solid #00d2a0;">' + esc(q.answer) + '</div></div>';
-            });
-            addMsg("assistant", h);
-        }).catch(function (e) { addMsg("error", e.message); });
-    };
-    document.getElementById("fw-hist").onclick = function () {
-        fetch(API_BASE + "/api/conversations").then(function (r) { return r.json(); }).then(function (data) {
-            var c = document.getElementById("fw-msgs"); c.innerHTML = "";
-            if (!data.length) { addMsg("system", "暂无历史"); return; }
-            var h = '<div style="font-size:13px;font-weight:600;padding:0 0 8px;border-bottom:1px solid rgba(255,255,255,0.1);margin-bottom:8px;">📋 历史对话</div>';
-            data.forEach(function (cv) {
-                h += '<div data-vid="' + esc(cv.video_id) + '" style="padding:8px 10px;border-radius:6px;background:rgba(255,255,255,0.05);cursor:pointer;margin-bottom:4px;">' +
-                    '<div style="font-size:12px;">' + esc(cv.title) + '</div>' +
-                    '<div style="font-size:10px;color:#999;">' + cv.msg_count + '条 · ' + (cv.last_time||'').slice(0,10) + '</div></div>';
-            });
-            c.innerHTML = h;
-            c.querySelectorAll("[data-vid]").forEach(function (el) {
-                el.onclick = function () {
-                    window._fwReady = false; videoId = this.dataset.vid;
-                    fetch(API_BASE + "/api/videos/" + videoId).then(function (r) { return r.json(); }).then(function (info) {
-                        if (info.status === "ready") { window._fwReady = true; updateStatus("✅ 就绪"); document.getElementById("fw-input").disabled = false; document.getElementById("fw-send").disabled = false; loadHistory(); }
-                        else { updateStatus("⏳ 重新处理..."); initVideo(); }
-                    });
-                };
-            });
-        }).catch(function () { addMsg("error", "加载失败"); });
-    };
-
+    autoBtn.onclick = function () { updateAutoBtn(!autoMode); localStorage.setItem("fw_auto", autoMode); };
+    document.getElementById("fw-proc").onclick = function () { videoId = null; window._fwReady = false; updateStatus("⏳ 手动处理..."); document.getElementById("fw-input").disabled = true; document.getElementById("fw-send").disabled = true; document.getElementById("fw-msgs").innerHTML = ""; lastUrl = cleanUrl(location.href); initVideo(); };
+    document.getElementById("fw-quiz").onclick = function () { if (!window._fwReady) { addMsg("system", "⏳ 等待就绪"); return; } addMsg("system", "🤔 出题中..."); fetch(API_BASE + "/api/videos/" + videoId + "/quiz", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ timestamp: getCurrentTime() }) }).then(function (r) { return r.json(); }).then(function (data) { var h = '<b>📝 小测验 (' + data.context_time + ')：</b><br><br>'; data.questions.forEach(function (q, i) { h += '<div style="margin-bottom:8px;"><b>' + (i + 1) + '. ' + esc(q.question) + '</b>'; h += '<div style="margin-top:3px;cursor:pointer;color:#00d2a0;font-size:11px;" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==\'block\'?\'none\':\'block\'">💡 查看答案</div>'; h += '<div style="display:none;background:#1a1a2e;padding:6px 10px;border-radius:4px;margin-top:3px;font-size:12px;border-left:3px solid #00d2a0;">' + esc(q.answer) + '</div></div>'; }); addMsg("assistant", h); }).catch(function (e) { addMsg("error", e.message); }); };
+    document.getElementById("fw-hist").onclick = function () { fetch(API_BASE + "/api/conversations").then(function (r) { return r.json(); }).then(function (data) { var c = document.getElementById("fw-msgs"); c.innerHTML = ""; if (!data.length) { addMsg("system", "暂无历史"); return; } var h = '<div style="font-size:13px;font-weight:600;padding:0 0 8px;border-bottom:1px solid rgba(255,255,255,0.1);margin-bottom:8px;">📋 历史对话</div>'; data.forEach(function (cv) { h += '<div data-vid="' + esc(cv.video_id) + '" style="padding:8px 10px;border-radius:6px;background:rgba(255,255,255,0.05);cursor:pointer;margin-bottom:4px;"><div style="font-size:12px;">' + esc(cv.title) + '</div><div style="font-size:10px;color:#999;">' + cv.msg_count + '条 · ' + (cv.last_time || '').slice(0, 10) + '</div></div>'; }); c.innerHTML = h; c.querySelectorAll("[data-vid]").forEach(function (el) { el.onclick = function () { window._fwReady = false; videoId = this.dataset.vid; fetch(API_BASE + "/api/videos/" + videoId).then(function (r) { return r.json(); }).then(function (info) { if (info.status === "ready") { window._fwReady = true; updateStatus("✅ 就绪"); document.getElementById("fw-input").disabled = false; document.getElementById("fw-send").disabled = false; loadHistory(); } else { updateStatus("⏳ 重新处理..."); initVideo(); } }); }; }); }).catch(function () { addMsg("error", "加载失败"); }); };
     document.getElementById("fw-send").onclick = sendQuestion;
     var inp = document.getElementById("fw-input");
     inp.onkeydown = function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendQuestion(); } };
     inp.oninput = function () { inp.style.height = "auto"; inp.style.height = Math.min(inp.scrollHeight, 80) + "px"; };
 
+    // ── 状态变量 ──
+    var videoId = null, autoMode = localStorage.getItem("fw_auto") !== "false", isProcessing = false;
+    var lastUrl = cleanUrl(location.href);
+    window._fwReady = false;
+
     // ── 初始化 ──
-    if (autoMode) {
-        initVideo();
-    } else {
-        addMsg("system", "自动处理已关闭，点击 🔄 按钮手动处理");
+    if (autoMode) { initVideo(); } else { addMsg("system", '<div style="text-align:center;">💡 点击 <b style="color:#00a1d6;">AI字幕</b>，获取精准回答<br/>自动处理已关闭，点击 🔄 手动处理</div>'); }
+
+    // ── B站字幕采集（MAIN world注入 + 直接处理） ──
+    var _subDone = false;
+
+    chrome.runtime.sendMessage({ type: "inject-interceptor" }, function (resp) {
+        console.log("[帧知] MAIN world 注入:", resp);
+    });
+
+    function _processSubtitle(url) {
+        if (_subDone) return;
+        _subDone = true;
+
+        // 先确保videId存在（触发from_url建立视频状态）
+        function doUpload() {
+            if (!videoId) { setTimeout(doUpload, 500); return; }
+            console.log("[帧知] 字幕处理:", url.substring(0,80)+"...");
+            updateStatus("📝 字幕采集中...");
+            fetch(API_BASE + "/api/videos/" + videoId + "/captured_subtitles_url", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ subtitle_url: url }),
+            }).then(function (r) { return r.json(); }).then(function (data) {
+                updateStatus("✅ 字幕就绪 (" + (data.segments || "?") + "行)");
+                window._fwReady = true;
+                document.getElementById("fw-input").disabled = false;
+                document.getElementById("fw-send").disabled = false;
+                loadHistory();
+            }).catch(function (e) {
+                _subDone = false;
+                console.error("[帧知] 字幕处理失败:", e.message);
+            });
+        }
+
+        // 如果videoId不存在，先初始化
+        if (!videoId) { initVideo(); }
+        doUpload();
     }
 
-    // ── 辅助函数 ──
-    function cleanUrl(url) {
-        try { var u = new URL(url); var s = ""; ["v","p"].forEach(function (k) { if (u.searchParams.has(k)) s += (s?"&":"") + k + "=" + u.searchParams.get(k); }); return u.origin + u.pathname + (s ? "?" + s : ""); }
-        catch (e) { return url; }
-    }
+    document.addEventListener("fw-subtitle", function (e) {
+        _processSubtitle(e.detail);
+    });
 
-    function getCurrentTime() {
-        try { if (window.player && window.player.getCurrentTime) return window.player.getCurrentTime(); } catch (e) {}
-        var v = document.querySelector("video"); return v ? v.currentTime : 0;
-    }
-
-    function updateStatus(t) { var e = document.getElementById("fw-status"); if (e) e.textContent = t; }
-
-    function esc(t) { var d = document.createElement("div"); d.textContent = t; return d.innerHTML; }
-
-    function fmt(s) { var m = Math.floor(s/60), sec = Math.floor(s%60); return String(m).padStart(2,"0") + ":" + String(sec).padStart(2,"0"); }
-
-    function addMsg(type, content) {
-        var c = document.getElementById("fw-msgs"), div = document.createElement("div");
-        var colors = { system: "rgba(255,255,255,0.04);color:#999", user: "#6c5ce7;color:#fff;align-self:flex-end;max-width:85%", assistant: "rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);max-width:85%", error: "#e74c3c;color:#fff" };
-        div.style.cssText = (colors[type]||colors.system) + ";padding:8px 10px;border-radius:6px;margin-bottom:6px;font-size:12px;line-height:1.5;word-break:break-word;min-width:0;max-width:100%;";
-        div.innerHTML = content;
-        c.appendChild(div); c.scrollTop = c.scrollHeight;
-    }
-
-    // ── 时间 + 模式 + URL检测 + 重连 ──
+    // 3. DOM script 标签扫描（兜底）
     setInterval(function () {
-        if (!window._fwReady) return;
-        var t = getCurrentTime();
-        document.getElementById("fw-time").textContent = fmt(t);
-        var paused = (document.querySelector("video") || {}).paused;
-        var lbl = document.getElementById("fw-mode-lbl");
-        if (lbl) { lbl.textContent = paused ? "🖼️ 画面" : "📝 文本"; lbl.style.color = paused ? "#00d2a0" : "#999"; }
-    }, 1000);
-
-    setInterval(function () {
-        var cur = cleanUrl(location.href);
-        if (cur !== lastUrl) {
-            lastUrl = cur;
-            if (autoMode) { videoId = null; window._fwReady = false; updateStatus("⏳ 新视频..."); document.getElementById("fw-input").disabled = true; document.getElementById("fw-send").disabled = true; document.getElementById("fw-msgs").innerHTML = ""; initVideo(); }
-            else { addMsg("system", "🔔 检测到新视频，点击 🔄 处理"); }
+        var scripts = document.querySelectorAll("script");
+        for (var i = 0; i < scripts.length; i++) {
+            var t = scripts[i].textContent || scripts[i].innerHTML || "";
+            if (!t) continue;
+            var m = t.match(/https?:\/\/[^\s\"<>]*(?:subtitle|ai_subtitle)\/[^\s\"<>]*\?auth_key=[^\s\"<>]+/g);
+            if (m) for (var j = 0; j < m.length; j++) uploadSubtitleUrl(m[j]);
         }
     }, 2000);
 
-    var isOffline = false;
-    setInterval(function () {
-        fetch(API_BASE + "/api/health").then(function () {
-            if (isOffline) { isOffline = false; updateStatus("✅ 已重连"); }
-        }).catch(function () { if (!isOffline) { isOffline = true; updateStatus("⚠️ 断线"); } });
-    }, 10000);
+    // ── 工具函数 ──
+    function cleanUrl(url) { try { var u = new URL(url); var s = ""; ["v", "p"].forEach(function (k) { if (u.searchParams.has(k)) s += (s ? "&" : "") + k + "=" + u.searchParams.get(k); }); return u.origin + u.pathname + (s ? "?" + s : ""); } catch (e) { return url; } }
+    function getCurrentTime() { try { if (window.player && window.player.getCurrentTime) return window.player.getCurrentTime(); } catch (e) { } var v = document.querySelector("video"); return v ? v.currentTime : 0; }
+    function updateStatus(t) { var e = document.getElementById("fw-status"); if (e) e.textContent = t; }
+    function esc(t) { var d = document.createElement("div"); d.textContent = t; return d.innerHTML; }
+    function fmt(s) { var m = Math.floor(s / 60), sec = Math.floor(s % 60); return String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0"); }
+    function addMsg(type, content) { var c = document.getElementById("fw-msgs"), div = document.createElement("div"); var colors = { system: "rgba(255,255,255,0.04);color:#999", user: "#6c5ce7;color:#fff;align-self:flex-end;max-width:85%", assistant: "rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);max-width:85%", error: "#e74c3c;color:#fff" }; div.style.cssText = (colors[type] || colors.system) + ";padding:8px 10px;border-radius:6px;margin-bottom:6px;font-size:12px;line-height:1.5;word-break:break-word;min-width:0;max-width:100%;"; div.innerHTML = content; c.appendChild(div); c.scrollTop = c.scrollHeight; }
+
+    // ── 定时任务 ──
+    setInterval(function () { if (!window._fwReady) return; var t = getCurrentTime(); document.getElementById("fw-time").textContent = fmt(t); var paused = (document.querySelector("video") || {}).paused; var lbl = document.getElementById("fw-mode-lbl"); if (lbl) { lbl.textContent = paused ? "🖼️ 画面" : "📝 文本"; lbl.style.color = paused ? "#00d2a0" : "#999"; } }, 1000);
+    setInterval(function () { var cur = cleanUrl(location.href); if (cur !== lastUrl) { lastUrl = cur; if (autoMode) { videoId = null; window._fwReady = false; updateStatus("⏳ 新视频..."); document.getElementById("fw-input").disabled = true; document.getElementById("fw-send").disabled = true; document.getElementById("fw-msgs").innerHTML = ""; initVideo(); } else { addMsg("system", "🔔 检测到新视频，点击 🔄 处理"); } } }, 2000);
+    var isOffline = false; setInterval(function () { fetch(API_BASE + "/api/health").then(function () { if (isOffline) { isOffline = false; updateStatus("✅ 已重连"); } }).catch(function () { if (!isOffline) { isOffline = true; updateStatus("⚠️ 断线"); } }); }, 10000);
 
     // ── 视频处理 ──
-    function initVideo() {
-        updateStatus("⏳ 建立索引...");
-        updateProgress({progress: 2, progress_text: "连接服务..."});
-        fetch(API_BASE + "/api/videos/from_url", {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ url: lastUrl }),
-        }).then(function (r) { return r.json(); }).then(function (data) {
-            videoId = data.video_id;
-            if (data.status === "ready") { readyState(data); }
-            else { updateStatus("⏳ ASR中..."); pollStatus(); }
-        }).catch(function (e) { updateStatus("❌ 连接失败"); });
-    }
-
-    function pollStatus() {
-        (function check() {
-            if (!videoId) { setTimeout(check, 3000); return; }
-            fetch(API_BASE + "/api/videos/" + videoId).then(function (r) { return r.json(); }).then(function (data) {
-                if (data.status === "ready") { readyState(data); return; }
-                if (data.status === "error") { updateStatus("❌ 失败"); return; }
-                if (data.progress) updateProgress(data);
-                setTimeout(check, 2000);
-            }).catch(function () { setTimeout(check, 5000); });
-        })();
-    }
-
-    function readyState(data) {
-        window._fwReady = true;
-        updateStatus("✅ 就绪 (" + (data.chunk_count||"?") + "片段)");
-        document.getElementById("fw-input").disabled = false;
-        document.getElementById("fw-send").disabled = false;
-        document.getElementById("fw-msgs").innerHTML =
-            '<div style="color:#00d2a0;text-align:center;padding:20px 0;">✅ 视频已就绪，开始提问吧！</div>';
-        loadHistory();
-    }
-
-    function updateProgress(data) {
-        var pct = data.progress || 0;
-        var text = data.progress_text || "处理中...";
-        updateStatus(text + " " + pct + "%");
-        var c = document.getElementById("fw-msgs");
-        if (c) {
-            c.innerHTML =
-                '<div style="text-align:center;padding:20px 0;">' +
-                '<div style="font-size:13px;color:#999;margin-bottom:10px;">' + text + '</div>' +
-                '<div style="background:rgba(255,255,255,0.08);border-radius:10px;height:8px;overflow:hidden;max-width:280px;margin:0 auto;">' +
-                '<div style="background:linear-gradient(90deg,#6c5ce7,#00d2a0);height:100%;width:' + pct + '%;border-radius:10px;transition:width 1s;"></div></div>' +
-                '<div style="font-size:12px;color:#666;margin-top:6px;">' + pct + '%</div></div>';
-        }
-    }
-
-    function loadHistory() {
-        fetch(API_BASE + "/api/videos/" + videoId + "/history?limit=30").then(function (r) { return r.json(); }).then(function (data) {
-            if (!data || !data.length) return;
-            var c = document.getElementById("fw-msgs"); c.innerHTML = "";
-            data.forEach(function (m) {
-                if (m.role === "user") addMsg("user", esc(m.content));
-                else if (m.role === "assistant") addMsg("assistant", esc(m.content));
-            });
-        }).catch(function () {});
-    }
+    function initVideo() { updateStatus("⏳ 建立索引..."); updateProgress({ progress: 2, progress_text: "连接服务..." }); fetch(API_BASE + "/api/videos/from_url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: lastUrl }) }).then(function (r) { return r.json(); }).then(function (data) { videoId = data.video_id; if (data.status === "ready") { readyState(data); } else { updateStatus("⏳ 处理中..."); pollStatus(); } }).catch(function (e) { updateStatus("❌ 连接失败"); }); }
+    function pollStatus() { (function check() { if (!videoId) { setTimeout(check, 3000); return; } fetch(API_BASE + "/api/videos/" + videoId).then(function (r) { return r.json(); }).then(function (data) { if (data.status === "ready") { readyState(data); return; } if (data.status === "error") { updateStatus("❌ 失败"); return; } if (data.progress) updateProgress(data); setTimeout(check, 2000); }).catch(function () { setTimeout(check, 5000); }); })(); }
+    function readyState(data) { window._fwReady = true; updateStatus("✅ 就绪 (" + (data.chunk_count || "?") + "片段)"); document.getElementById("fw-input").disabled = false; document.getElementById("fw-send").disabled = false; document.getElementById("fw-msgs").innerHTML = '<div style="color:#00d2a0;text-align:center;padding:20px 0;">✅ 视频已就绪，开始提问吧！</div>'; loadHistory(); }
+    function updateProgress(data) { var pct = data.progress || 0; var text = data.progress_text || "处理中..."; updateStatus(text + " " + pct + "%"); var c = document.getElementById("fw-msgs"); if (c) { var hint = pct < 40 ? '<div style="text-align:center;font-size:11px;color:#999;margin-bottom:8px;">💡 点击 <b style="color:#00a1d6;">AI字幕</b>，获取精准回答</div>' : ''; c.innerHTML = '<div style="text-align:center;padding:20px 0;">' + hint + '<div style="font-size:13px;color:#999;margin-bottom:10px;">' + text + '</div><div style="background:rgba(255,255,255,0.08);border-radius:10px;height:8px;overflow:hidden;max-width:280px;margin:0 auto;"><div style="background:linear-gradient(90deg,#6c5ce7,#00d2a0);height:100%;width:' + pct + '%;border-radius:10px;transition:width 1s;"></div></div><div style="font-size:12px;color:#666;margin-top:6px;">' + pct + '%</div></div>'; } }
+    function loadHistory() { fetch(API_BASE + "/api/videos/" + videoId + "/history?limit=30").then(function (r) { return r.json(); }).then(function (data) { if (!data || !data.length) return; var c = document.getElementById("fw-msgs"); c.innerHTML = ""; data.forEach(function (m) { if (m.role === "user") addMsg("user", esc(m.content)); else if (m.role === "assistant") addMsg("assistant", esc(m.content)); }); }).catch(function () { }); }
 
     // ── 发送问题 ──
-    function sendQuestion() {
-        if (!videoId) return;
-        var inp = document.getElementById("fw-input"), q = inp.value.trim();
-        if (!q || !window._fwReady || isProcessing) return;
-        isProcessing = true; inp.disabled = true; document.getElementById("fw-send").disabled = true; inp.value = ""; inp.style.height = "auto";
+    function sendQuestion() { if (!videoId) return; var inp = document.getElementById("fw-input"), q = inp.value.trim(); if (!q || !window._fwReady || isProcessing) return; isProcessing = true; inp.disabled = true; document.getElementById("fw-send").disabled = true; inp.value = ""; inp.style.height = "auto"; var paused = (document.querySelector("video") || {}).paused; var isVision = paused, t = getCurrentTime(); addMsg("user", (isVision ? "🖼️ " : "") + q); var endpoint = isVision ? "ask_frame" : "ask"; var body = { question: q, timestamp: t }; if (isVision) { var frame = captureFrame(); if (frame) body.frame_base64 = frame; } fetch(API_BASE + "/api/videos/" + videoId + "/" + endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(function (r) { return r.json(); }).then(function (data) { var h = esc(data.answer); if (data.frame_description) h = '<span style="background:#e17055;color:#fff;padding:1px 6px;border-radius:3px;font-size:10px;">🖼️ 画面</span><br>' + h; if (data.references && data.references.length > 0) { h += '<div style="margin-top:8px;font-size:11px;color:#999;">📖 '; var seen = {}; data.references.forEach(function (ref) { var k = ref.start_time + "-" + ref.end_time; if (seen[k]) return; seen[k] = true; h += '<span style="background:#00d2a0;color:#0f0f1a;padding:1px 6px;border-radius:3px;font-size:10px;margin:1px;cursor:pointer;" onclick="try{if(window.player&&window.player.seek)window.player.seek(' + ref.start_time + ');else{var v=document.querySelector(\'video\');if(v)v.currentTime=' + ref.start_time + ';}}catch(e){}">' + fmt(ref.start_time) + '~' + fmt(ref.end_time) + '</span> '; }); h += '</div>'; } addMsg("assistant", h); }).catch(function (e) { addMsg("error", e.message); }).finally(function () { inp.disabled = false; document.getElementById("fw-send").disabled = false; inp.focus(); isProcessing = false; }); }
+    function captureFrame() { try { var v = document.querySelector("video"); if (!v || v.videoWidth === 0) return null; var c = document.createElement("canvas"); c.width = v.videoWidth; c.height = v.videoHeight; c.getContext("2d").drawImage(v, 0, 0); return c.toDataURL("image/jpeg", 0.7).replace(/^data:image\/jpeg;base64,/, ""); } catch (e) { return null; } }
 
-        var paused = (document.querySelector("video") || {}).paused;
-        var isVision = paused, t = getCurrentTime();
-        addMsg("user", (isVision ? "🖼️ " : "") + q);
-
-        var endpoint = isVision ? "ask_frame" : "ask";
-        var body = { question: q, timestamp: t };
-        if (isVision) {
-            var frame = captureFrame();
-            if (frame) body.frame_base64 = frame;
-        }
-
-        fetch(API_BASE + "/api/videos/" + videoId + "/" + endpoint, {
-            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-        }).then(function (r) { return r.json(); }).then(function (data) {
-            var h = esc(data.answer);
-            if (data.frame_description) h = '<span style="background:#e17055;color:#fff;padding:1px 6px;border-radius:3px;font-size:10px;">🖼️ 画面</span><br>' + h;
-            if (data.references && data.references.length > 0) {
-                h += '<div style="margin-top:8px;font-size:11px;color:#999;">📖 ';
-                var seen = {};
-                data.references.forEach(function (ref) {
-                    var k = ref.start_time + "-" + ref.end_time; if (seen[k]) return; seen[k] = true;
-                    h += '<span style="background:#00d2a0;color:#0f0f1a;padding:1px 6px;border-radius:3px;font-size:10px;margin:1px;cursor:pointer;" onclick="' +
-                        'try{if(window.player&&window.player.seek)window.player.seek(' + ref.start_time + ');else{var v=document.querySelector(\'video\');if(v)v.currentTime=' + ref.start_time + ';}}catch(e){}">' +
-                        fmt(ref.start_time) + '~' + fmt(ref.end_time) + '</span> ';
-                });
-                h += '</div>';
-            }
-            addMsg("assistant", h);
-        }).catch(function (e) { addMsg("error", e.message); }).finally(function () {
-            inp.disabled = false; document.getElementById("fw-send").disabled = false; inp.focus(); isProcessing = false;
-        });
-    }
-
-    function captureFrame() {
-        try {
-            var v = document.querySelector("video"); if (!v || v.videoWidth === 0) return null;
-            var c = document.createElement("canvas"); c.width = v.videoWidth; c.height = v.videoHeight;
-            c.getContext("2d").drawImage(v, 0, 0);
-            return c.toDataURL("image/jpeg", 0.7).replace(/^data:image\/jpeg;base64,/, "");
-        } catch (e) { return null; }
-    }
-
-    console.log("[帧知] v2 loaded");
+    console.log("[帧知] v3 loaded (with ServiceWorker subtitle capture)");
 })();

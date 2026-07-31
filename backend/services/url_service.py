@@ -43,6 +43,123 @@ def get_video_info(url: str) -> dict:
     return result
 
 
+def _extract_bilibili_subtitles_api(bvid: str, p: int = 1) -> list[dict] | None:
+    """直接调用B站API获取字幕"""
+    import httpx
+    try:
+        # Step 1: 获取视频 cid
+        info_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
+        r = httpx.get(info_url, timeout=15,
+                      headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.bilibili.com/"})
+        r.raise_for_status()
+        data = r.json()["data"]
+
+        # 获取指定分P的 cid
+        pages = data.get("pages", [])
+        cid = pages[p - 1]["cid"] if p <= len(pages) and p > 0 else pages[0]["cid"]
+
+        # Step 2: 获取字幕列表
+        sub_url = f"https://api.bilibili.com/x/player/v2?bvid={bvid}&cid={cid}"
+        r = httpx.get(sub_url, timeout=15,
+                      headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.bilibili.com/"})
+        r.raise_for_status()
+        sub_data = r.json()["data"].get("subtitle", {}).get("subtitles", [])
+
+        if not sub_data:
+            return None
+
+        # 取中文字幕
+        sub_info = next((s for s in sub_data if "zh" in s.get("lan_doc", "").lower()), sub_data[0])
+        sub_url = "https:" + sub_info["subtitle_url"] if sub_info["subtitle_url"].startswith("//") else sub_info["subtitle_url"]
+
+        r = httpx.get(sub_url, timeout=15)
+        r.raise_for_status()
+        body = r.json()["body"]
+
+        subtitles = []
+        for item in body:
+            text = item.get("content", "").strip()
+            if text:
+                subtitles.append({
+                    "text": text,
+                    "start": round(item.get("from", 0), 2),
+                    "end": round(item.get("to", 0), 2),
+                })
+        return subtitles if subtitles else None
+    except Exception as e:
+        logger.debug(f"B站API subtitles: {e}")
+        return None
+
+
+def extract_subtitles(url: str) -> list[dict] | None:
+    """提取B站视频字幕（优先B站API，fallback yt-dlp）"""
+    import re
+
+    # 1. B站API（最准）
+    bv = re.search(r'(BV\w+)', url)
+    if bv:
+        p = int((re.search(r'[?&]p=(\d+)', url) or [None, 1])[1] or 1)
+        result = _extract_bilibili_subtitles_api(bv.group(1), p)
+        if result:
+            logger.info(f"Got B站 subtitles via API: {len(result)} segments")
+            return result
+
+    # 2. yt-dlp fallback
+    import yt_dlp
+    ydl_opts = {
+        "writesubtitles": True,
+        "writeautomaticsub": True,
+        "subtitleslangs": ["zh-Hans", "zh", "en"],
+        "skip_download": True,
+        "quiet": True,
+        "no_warnings": True,
+        "force_ipv4": True,
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            subs = info.get("subtitles") or info.get("automatic_captions") or {}
+            for lang in ["zh-Hans", "zh", "zh-CN", "en"]:
+                entries = subs.get(lang)
+                if entries:
+                    # 下载字幕文件
+                    sub_url = entries[-1]["url"]  # 取最后一个格式
+                    import httpx
+                    r = httpx.get(sub_url, timeout=30, follow_redirects=True)
+                    r.raise_for_status()
+                    return _parse_vtt(r.text)
+        logger.info("No B站 subtitles found, will fall back to ASR")
+    except Exception as e:
+        logger.warning(f"Failed to extract subtitles: {e}")
+    return None
+
+
+def _parse_vtt(vtt_text: str) -> list[dict]:
+    """解析 VTT 字幕文件为帧知格式"""
+    import re
+    subtitles = []
+    # 匹配时间戳行: 00:00:01.000 --> 00:00:05.000
+    pattern = r'(\d{2}):(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[.,](\d{3})'
+    parts = re.split(pattern, vtt_text)
+
+    for i in range(1, len(parts), 9):
+        if i + 8 >= len(parts):
+            break
+        h1, m1, s1, ms1 = int(parts[i]), int(parts[i+1]), int(parts[i+2]), int(parts[i+3])
+        h2, m2, s2, ms2 = int(parts[i+4]), int(parts[i+5]), int(parts[i+6]), int(parts[i+7])
+        text = parts[i+8].strip()
+        # 清理 VTT 标签
+        text = re.sub(r'<[^>]+>', '', text)
+        text = text.replace('&nbsp;', ' ').replace('&amp;', '&')
+        if text and text not in {'WEBVTT', 'Kind: captions', 'Language:'}:
+            subtitles.append({
+                "text": text,
+                "start": round(h1 * 3600 + m1 * 60 + s1 + ms1 / 1000, 2),
+                "end": round(h2 * 3600 + m2 * 60 + s2 + ms2 / 1000, 2),
+            })
+    return subtitles
+
+
 def get_audio_stream_url(url: str) -> str | None:
     """用 yt-dlp 获取音频直链（不下载），直接传给 ASR API 处理"""
     import yt_dlp
