@@ -149,6 +149,93 @@ async def health():
 # 用量统计 API
 # ═══════════════════════════════════════════
 
+@app.post("/api/videos/{video_id}/captured_subtitles_url")
+async def captured_subtitles_url(video_id: str, req: dict):
+    """接收浏览器拦截的B站字幕URL，下载、缓存、建立索引（一步到位）"""
+    from backend.services.chunk_service import chunk_subtitles
+    from backend.services.embedding_service import embed_texts
+    from backend.services.vector_store import build_index
+    from backend.services.cache_service import save_subtitle_cache
+    import httpx
+
+    state = video_states.get(video_id)
+    if not state:
+        raise HTTPException(404, "视频不存在")
+
+    url = req.get("subtitle_url", "")
+    if not url:
+        raise HTTPException(400, "字幕URL为空")
+    if url.startswith("//"): url = "https:" + url
+
+    logger.info(f"[{video_id}] Downloading B站 subtitle...")
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(url, headers={
+            "Referer": "https://www.bilibili.com/",
+            "User-Agent": "Mozilla/5.0",
+            "Origin": "https://www.bilibili.com",
+        })
+        resp.raise_for_status()
+        sub_data = resp.json()
+
+    body = sub_data.get("body", [])
+    subtitles = []
+    for item in body:
+        text = item.get("content", "").strip()
+        if text:
+            subtitles.append({"text": text, "start": round(item.get("from", 0), 2), "end": round(item.get("to", 0), 2)})
+
+    if not subtitles:
+        raise HTTPException(400, "字幕数据为空")
+
+    logger.info(f"[{video_id}] B站 subtitle: {len(subtitles)} lines (cached, wait for index)")
+    state["subtitles"] = subtitles
+    state["video_hash"] = video_id
+    save_subtitle_cache(video_id, subtitles)
+
+    # 只缓存字幕，不建索引。等用户点 🔄 或自动处理时才触发 _process_url_task
+    state["status"] = "subtitles"
+    state["progress"] = 30
+    state["progress_text"] = "字幕已获取"
+    _save_states()
+    return {"status": "ok", "segments": len(subtitles)}
+
+
+@app.post("/api/videos/{video_id}/captured_subtitles")
+async def captured_subtitles(video_id: str, req: dict):
+    """接收Chrome插件采集的B站AI字幕"""
+    from backend.services.chunk_service import chunk_subtitles
+    from backend.services.embedding_service import embed_texts
+    from backend.services.vector_store import build_index
+    from backend.services.cache_service import save_subtitle_cache
+
+    state = video_states.get(video_id)
+    if not state:
+        raise HTTPException(404, "视频不存在")
+
+    subtitles = req.get("subtitles", [])
+    if not subtitles:
+        raise HTTPException(400, "字幕数据为空")
+
+    logger.info(f"[{video_id}] Received {len(subtitles)} subtitle lines from browser")
+
+    state["subtitles"] = subtitles
+    state["video_hash"] = video_id
+    save_subtitle_cache(video_id, subtitles)
+
+    chunks = chunk_subtitles(subtitles, video_id)
+    state["chunks"] = chunks
+
+    chunk_texts = [c["text"] for c in chunks]
+    embeddings = await embed_texts(chunk_texts, video_id=video_id)
+    build_index(chunks, embeddings, video_id)
+    _save_states()
+
+    state["status"] = "ready"
+    state["progress"] = 100
+    logger.info(f"[{video_id}] Subtitles processed: {len(chunks)} chunks")
+    return {"status": "ok", "chunks": len(chunks)}
+
+
 @app.post("/api/videos/{video_id}/quiz")
 async def generate_quiz_endpoint(video_id: str, req: dict):
     """主动学习：根据当前视频位置生成考题"""
@@ -234,9 +321,14 @@ async def process_url(background_tasks: BackgroundTasks, req: dict):
         if st.get("status") == "ready":
             logger.info(f"Video already ready (memory): {video_id}")
             return {"video_id": video_id, "status": "ready", "title": st["original_name"]}
+        elif st.get("status") == "subtitles":
+            # 字幕已缓存，触发索引构建（不含ASR）
+            logger.info(f"[{video_id}] Subtitles cached, triggering indexing")
+            background_tasks.add_task(_process_url_task, video_id, url)
+            return {"video_id": video_id, "status": "processing", "title": st.get("original_name", url)}
         elif st.get("status") == "error":
             logger.info(f"Video previously failed, retrying: {video_id}")
-            del video_states[video_id]  # 清除错误状态，重新处理
+            del video_states[video_id]
 
     # 检查磁盘缓存（服务重启后内存清空，但磁盘缓存还在）
     from backend.services.cache_service import embedding_cache_exists, subtitle_cache_exists
@@ -573,7 +665,7 @@ async def _process_video_task(video_id: str):
 
 async def _process_url_task(video_id: str, url: str):
     """后台处理URL视频：获取音频直链 → ASR(URL直传) → Chunk → Embedding"""
-    from backend.services.url_service import download_audio, cleanup_audio, get_audio_stream_url
+    from backend.services.url_service import download_audio, cleanup_audio, get_audio_stream_url, extract_subtitles
     from backend.services.cache_service import save_subtitle_cache, subtitle_cache_exists, load_subtitle_cache
     from backend.services.asr_service import transcribe
     from backend.services.asr_api_service import transcribe_via_url
@@ -595,44 +687,55 @@ async def _process_url_task(video_id: str, url: str):
         state["video_hash"] = video_id
         _progress(5, "获取视频信息...")
 
-        # 1. 检查字幕缓存
+        # 1. 检查字幕缓存（B站字幕或之前ASR的字幕）
         if subtitle_cache_exists(video_id):
-            logger.info(f"[{video_id}] Subtitle cache hit")
+            logger.info(f"[{video_id}] Subtitle cache hit, skip ASR")
             subtitles = load_subtitle_cache(video_id)
+            _progress(30, "字幕已缓存")
+        elif state.get("status") == "subtitles" and state.get("subtitles"):
+            logger.info(f"[{video_id}] Subtitle loaded from memory, skip ASR")
+            subtitles = state["subtitles"]
+            _progress(30, "字幕已缓存")
         else:
-            # 2. 获取音频 → ASR
-            import time
-            _progress(10, "获取音频流...")
-            # 尝试 DashScope URL 直传（仅对可公开访问的 URL 有效）
-            stream_url = get_audio_stream_url(url)
-            dashscope_ok = False
-            if stream_url and DASHSCOPE_API_KEY:
-                logger.info(f"[{video_id}] Trying DashScope URL direct ASR...")
-                t0 = time.time()
-                try:
-                    if "mcdn.bilivideo" in stream_url or "bilivideo.com" in stream_url:
-                        raise Exception("B站CDN URL need auth, skip direct")
-                    subtitles = await transcribe_via_url(stream_url, DASHSCOPE_API_KEY)
-                    dashscope_ok = True
-                    logger.info(f"[{video_id}] DashScope ASR done in {time.time()-t0:.1f}s")
-                except Exception as e:
-                    logger.info(f"[{video_id}] DashScope direct failed ({str(e)[:50]}), downloading...")
-
-            if not dashscope_ok:
-                _progress(15, "下载音频中...")
-                t0 = time.time()
-                audio_path = download_audio(url, video_id)
-                _progress(30, "语音识别中...")
-                dt = time.time() - t0
-                logger.info(f"[{video_id}] Audio downloaded in {dt:.0f}s, uploading for ASR...")
-                t0 = time.time()
-                subtitles = await transcribe(audio_path)
-                logger.info(f"[{video_id}] ASR done in {time.time()-t0:.0f}s: {len(subtitles)} segments")
+            # 2. 优先用B站AI字幕（准确、免费、带时间戳）
+            subtitles = extract_subtitles(url)
+            if subtitles:
+                logger.info(f"[{video_id}] Got B站 subtitles: {len(subtitles)} segments")
+                _progress(30, "字幕已获取")
             else:
-                _progress(30, "语音识别中...")
+                # 3. 获取音频 → ASR
+                import time
+                _progress(10, "获取音频流...")
+                # 尝试 DashScope URL 直传（仅对可公开访问的 URL 有效）
+                stream_url = get_audio_stream_url(url)
+                dashscope_ok = False
+                if stream_url and DASHSCOPE_API_KEY:
+                    logger.info(f"[{video_id}] Trying DashScope URL direct ASR...")
+                    t0 = time.time()
+                    try:
+                        if "mcdn.bilivideo" in stream_url or "bilivideo.com" in stream_url:
+                            raise Exception("B站CDN URL need auth, skip direct")
+                        subtitles = await transcribe_via_url(stream_url, DASHSCOPE_API_KEY)
+                        dashscope_ok = True
+                        logger.info(f"[{video_id}] DashScope ASR done in {time.time()-t0:.1f}s")
+                    except Exception as e:
+                        logger.info(f"[{video_id}] DashScope direct failed ({str(e)[:50]}), downloading...")
 
-            save_subtitle_cache(video_id, subtitles)
-            _progress(60, "知识索引中...")
+                if not dashscope_ok:
+                    _progress(15, "下载音频中...")
+                    t0 = time.time()
+                    audio_path = download_audio(url, video_id)
+                    _progress(30, "语音识别中...")
+                    dt = time.time() - t0
+                    logger.info(f"[{video_id}] Audio downloaded in {dt:.0f}s, uploading for ASR...")
+                    t0 = time.time()
+                    subtitles = await transcribe(audio_path)
+                    logger.info(f"[{video_id}] ASR done in {time.time()-t0:.0f}s: {len(subtitles)} segments")
+                else:
+                    _progress(30, "语音识别中...")
+
+                save_subtitle_cache(video_id, subtitles)
+                _progress(60, "知识索引中...")
 
         state["subtitles"] = subtitles
 

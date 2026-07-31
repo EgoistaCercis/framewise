@@ -3,9 +3,13 @@
   "name": "帧知 - 视频学习助手",
   "version": "0.1.0",
   "description": "在B站/YouTube学习视频时，随时向AI提问，获得带时间戳的精准回答",
-  "permissions": [],
+  "permissions": ["scripting", "webRequest"],
+  "background": {
+    "service_worker": "background.js"
+  },
   "host_permissions": [
     "*://*.bilibili.com/*",
+    "*://*.hdslb.com/*",
     "*://www.youtube.com/*",
     "http://localhost:8000/*",
     "http://127.0.0.1:8000/*"
