@@ -253,12 +253,12 @@ def _parse_quiz(text: str) -> list[dict]:
 
 
 async def _get_conversation_context(video_id: str) -> str:
-    """加载对话上下文（用于拼入 Prompt）"""
+    """加载对话上下文（含四层压缩）"""
     if not video_id:
         return ""
     try:
         from backend.services.conversation_service import get_recent_context
-        return get_recent_context(video_id, turns=5)
+        return await get_recent_context(video_id)
     except Exception:
         return ""
 

@@ -86,6 +86,12 @@ FFMPEG_PATH = _ffmpeg_env if os.path.exists(_ffmpeg_env) or _ffmpeg_env == "ffmp
 # RAG 配置
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))  # 检索返回的chunk数量
 
+# 上下文压缩配置（四层策略）
+CONTEXT_MAX_MESSAGES = int(os.getenv("CONTEXT_MAX_MESSAGES", "50"))       # 第1层：最大消息数
+CONTEXT_MAX_TOKENS = int(os.getenv("CONTEXT_MAX_TOKENS", "80000"))       # 80% 窗口
+TOOL_TRIM_LENGTH = int(os.getenv("TOOL_TRIM_LENGTH", "500"))             # 第2层：工具输出裁剪
+SUMMARY_TARGET_LENGTH = int(os.getenv("SUMMARY_TARGET_LENGTH", "200"))    # 第3层：摘要目标
+
 # ═══════════════════════════════════════════
 # Loguru 日志配置
 # ═══════════════════════════════════════════
