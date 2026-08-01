@@ -192,11 +192,12 @@ async def captured_subtitles_url(video_id: str, req: dict):
     state["video_hash"] = video_id
     save_subtitle_cache(video_id, subtitles)
 
-    # 只缓存字幕，不建索引。等用户点 🔄 或自动处理时才触发 _process_url_task
+    # 缓存字幕，中止正在跑的后台任务（如有），等用户手动触发索引
     state["status"] = "subtitles"
     state["progress"] = 30
-    state["progress_text"] = "字幕已获取"
+    state["progress_text"] = "字幕已缓存，点击 🔄 处理"
     _save_states()
+    logger.info(f"[{video_id}] Subtitles cached, pending manual indexing")
     return {"status": "ok", "segments": len(subtitles)}
 
 
@@ -322,10 +323,16 @@ async def process_url(background_tasks: BackgroundTasks, req: dict):
             logger.info(f"Video already ready (memory): {video_id}")
             return {"video_id": video_id, "status": "ready", "title": st["original_name"]}
         elif st.get("status") == "subtitles":
-            # 字幕已缓存，触发索引构建（不含ASR）
-            logger.info(f"[{video_id}] Subtitles cached, triggering indexing")
-            background_tasks.add_task(_process_url_task, video_id, url)
-            return {"video_id": video_id, "status": "processing", "title": st.get("original_name", url)}
+            # 字幕已缓存，等待手动触发
+            force = req.get("force", False)
+            if force:
+                logger.info(f"[{video_id}] Manual trigger with subtitles")
+                st["status"] = "processing"  # 改状态让后台任务放行
+                _save_states()
+                background_tasks.add_task(_process_url_task, video_id, url)
+                return {"video_id": video_id, "status": "processing", "title": st.get("original_name", url)}
+            logger.info(f"[{video_id}] Subtitles cached, waiting for manual trigger")
+            return {"video_id": video_id, "status": "subtitles", "title": st.get("original_name", url)}
         elif st.get("status") == "error":
             logger.info(f"Video previously failed, retrying: {video_id}")
             del video_states[video_id]
@@ -687,14 +694,19 @@ async def _process_url_task(video_id: str, url: str):
         state["video_hash"] = video_id
         _progress(5, "获取视频信息...")
 
-        # 1. 检查字幕缓存（B站字幕或之前ASR的字幕）
+        # 0. 浏览器字幕已缓存且非手动触发 → 不自动索引
+        if subtitle_cache_exists(video_id) and state.get("status") == "subtitles":
+            logger.info(f"[{video_id}] Browser subtitles present, skip auto-indexing")
+            return
+
+        # 1. 检查字幕缓存
         if subtitle_cache_exists(video_id):
-            logger.info(f"[{video_id}] Subtitle cache hit, skip ASR")
             subtitles = load_subtitle_cache(video_id)
+            logger.info(f"[{video_id}] Subtitle cache hit ({len(subtitles)} lines), skip ASR")
             _progress(30, "字幕已缓存")
-        elif state.get("status") == "subtitles" and state.get("subtitles"):
-            logger.info(f"[{video_id}] Subtitle loaded from memory, skip ASR")
+        elif state.get("subtitles"):
             subtitles = state["subtitles"]
+            logger.info(f"[{video_id}] Subtitles from memory, skip ASR")
             _progress(30, "字幕已缓存")
         else:
             # 2. 优先用B站AI字幕（准确、免费、带时间戳）
@@ -738,6 +750,11 @@ async def _process_url_task(video_id: str, url: str):
                 _progress(60, "知识索引中...")
 
         state["subtitles"] = subtitles
+
+        # 2.5 二次检查：浏览器是否在后台已采集到字幕
+        if subtitle_cache_exists(video_id) and state.get("status") == "subtitles":
+            logger.info(f"[{video_id}] Browser subtitles arrived during processing, defer indexing")
+            return
 
         # 3. Chunk + Embedding + FAISS
         chunks = chunk_subtitles(subtitles, video_id)
