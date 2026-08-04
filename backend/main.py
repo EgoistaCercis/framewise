@@ -470,11 +470,14 @@ async def ask_question(video_id: str, req: AskRequest):
             video_id=video_id,
         )
     except FileNotFoundError:
-        # FAISS 索引丢失（清理缓存导致），标记为需重新处理
         state["status"] = "error"
         state["error"] = "索引文件丢失，请点击🔄按钮重新处理"
         _save_states()
         raise HTTPException(410, "索引丢失，请重新处理该视频")
+    except RuntimeError as e:
+        error_msg = str(e)
+        logger.error(f"[{video_id}] Provider error: {error_msg}")
+        raise HTTPException(503, detail=error_msg)
 
     # 保存对话记录
     from backend.services.conversation_service import save_exchange
@@ -555,12 +558,15 @@ async def ask_with_frame(video_id: str, req: AskFrameRequest):
         )
 
     # Step 2: 结合RAG回答
-    result = await answer_with_frame_context(
-        video_hash=state["video_hash"],
-        question=req.question,
-        frame_description=frame_result["description"],
-        video_id=video_id,
-    )
+    try:
+        result = await answer_with_frame_context(
+            video_hash=state["video_hash"],
+            question=req.question,
+            frame_description=frame_result["description"],
+            video_id=video_id,
+        )
+    except RuntimeError as e:
+        raise HTTPException(503, detail=str(e))
 
     # 保存对话记录
     from backend.services.conversation_service import save_exchange

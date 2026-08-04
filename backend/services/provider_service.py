@@ -72,14 +72,43 @@ def get_provider(service: str) -> tuple:
     priority = {
         "chat": ["deepseek"],
         "embedding": ["siliconflow"],
-        "asr": ["dashscope", "siliconflow"],  # DashScope URL 优先，SiliconFlow fallback
+        "asr": ["dashscope", "siliconflow"],
         "vision": ["dashscope"],
     }
     for name in priority.get(service, []):
         cfg = PROVIDERS.get(name, {}).get(service)
         if cfg and cfg.get("api_key"):
             return name, cfg
-    raise RuntimeError(f"No provider configured for: {service}")
+    names = {"chat": "LLM", "embedding": "Embedding", "asr": "ASR", "vision": "Vision"}
+    raise RuntimeError(f"{names.get(service, service)} API Key 未配置，请在 .env 中设置")
+
+
+def _translate_api_error(e: Exception, provider: str = "") -> str:
+    """将 API 错误翻译为用户友好的中文提示"""
+    import httpx
+    if isinstance(e, httpx.HTTPStatusError):
+        code = e.response.status_code
+        body = ""
+        try:
+            body = e.response.json().get("error", {}).get("message", "") or str(e.response.text)[:200]
+        except Exception:
+            pass
+        if code == 401:
+            return f"{provider} API Key 无效，请检查 .env 配置"
+        elif code == 403:
+            return f"{provider} 拒绝访问（403），可能是 API Key 权限不足"
+        elif code == 429:
+            return f"{provider} 请求过于频繁（429），请稍后重试"
+        elif code == 402:
+            return f"{provider} API 额度已用完，请充值或更换 Key"
+        elif code >= 500:
+            return f"{provider} 服务器错误（{code}），请稍后重试"
+        elif code == 400:
+            return f"{provider} 请求参数错误：{body}"
+        return f"{provider} API 错误（{code}）：{body}"
+    elif isinstance(e, (httpx.ConnectError, httpx.TimeoutException)):
+        return f"无法连接 {provider}，请检查网络"
+    return f"{provider} 调用失败：{str(e)[:100]}"
 
 
 async def call_chat(messages: list[dict], system_prompt: str = None,
@@ -107,13 +136,15 @@ async def call_chat(messages: list[dict], system_prompt: str = None,
         "max_tokens": max_tokens,
     }
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(cfg["endpoint"], json=payload, headers=headers)
-        resp.raise_for_status()
-        data = resp.json()
-
-    answer = data["choices"][0]["message"]["content"]
-    return answer, data.get("usage", {})
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(cfg["endpoint"], json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+        answer = data["choices"][0]["message"]["content"]
+        return answer, data.get("usage", {})
+    except Exception as e:
+        raise RuntimeError(_translate_api_error(e, provider)) from e
 
 
 async def call_embedding(texts: list[str], provider: str = None) -> list[list[float]]:
@@ -133,17 +164,19 @@ async def call_embedding(texts: list[str], provider: str = None) -> list[list[fl
 
     all_embeddings = []
     batch_size = 32
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        for i in range(0, len(texts), batch_size):
-            batch = texts[i:i + batch_size]
-            payload = {"model": cfg["model"], "input": batch}
-            resp = await client.post(cfg["endpoint"], json=payload, headers=headers)
-            resp.raise_for_status()
-            data = resp.json()
-            batch_results = sorted(data["data"], key=lambda x: x["index"])
-            all_embeddings.extend([item["embedding"] for item in batch_results])
-
-    return all_embeddings
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            for i in range(0, len(texts), batch_size):
+                batch = texts[i:i + batch_size]
+                payload = {"model": cfg["model"], "input": batch}
+                resp = await client.post(cfg["endpoint"], json=payload, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+                batch_results = sorted(data["data"], key=lambda x: x["index"])
+                all_embeddings.extend([item["embedding"] for item in batch_results])
+        return all_embeddings
+    except Exception as e:
+        raise RuntimeError(_translate_api_error(e, provider)) from e
 
 
 async def call_vision(image_base64: str, prompt: str = None,
@@ -172,6 +205,7 @@ async def call_vision(image_base64: str, prompt: str = None,
             },
             "parameters": {"max_tokens": 500},
         }
+    try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(cfg["endpoint"], json=payload, headers=headers)
             resp.raise_for_status()
@@ -184,8 +218,8 @@ async def call_vision(image_base64: str, prompt: str = None,
                 for item in description
             )
         return description, data.get("usage", {})
-
-    raise RuntimeError(f"Unsupported vision format: {cfg['format']}")
+    except Exception as e:
+        raise RuntimeError(_translate_api_error(e, provider)) from e
 
 
 async def call_asr_upload(audio_path: str, provider: str = None) -> list[dict]:
@@ -206,7 +240,7 @@ async def call_asr_upload(audio_path: str, provider: str = None) -> list[dict]:
     mime_map = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".m4a": "audio/mp4"}
     mime = mime_map.get(ext, "audio/wav")
 
-    # 带重试的上传（ASR API 偶发不稳定）
+    # 带重试的上传
     last_error = None
     for attempt in range(3):
         try:
@@ -221,7 +255,7 @@ async def call_asr_upload(audio_path: str, provider: str = None) -> list[dict]:
                     resp = await client.post(cfg["endpoint"], files=files, data=data, headers=headers)
                     resp.raise_for_status()
                     result = resp.json()
-                    break  # 成功，跳出重试循环
+                    break
         except httpx.HTTPStatusError as e:
             last_error = e
             if e.response.status_code >= 500:
@@ -230,9 +264,9 @@ async def call_asr_upload(audio_path: str, provider: str = None) -> list[dict]:
                 import asyncio
                 await asyncio.sleep(wait)
             else:
-                raise  # 非服务端错误，不重试
+                raise RuntimeError(_translate_api_error(e, provider)) from e
     else:
-        raise last_error
+        raise RuntimeError(_translate_api_error(last_error, provider)) from last_error
 
     subtitles = []
     for seg in result.get("segments", []):
