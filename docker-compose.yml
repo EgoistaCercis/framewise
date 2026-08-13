@@ -9,7 +9,7 @@ services:
       - ./data:/app/data
       # 配置文件（API Key 等）
       - ./.env:/app/.env
-      # 后端代码（修改自动重启）
+      # 后端代码（热重载，用轮询监听）
       - ./backend:/app/backend
     restart: unless-stopped
     dns:
@@ -18,3 +18,5 @@ services:
     environment:
       - TZ=Asia/Shanghai
       - FFMPEG_PATH=ffmpeg
+      # 轮询式文件监听，解决 Windows/WSL2 挂载卷 inotify 报错
+      - WATCHFILES_FORCE_POLLING=true

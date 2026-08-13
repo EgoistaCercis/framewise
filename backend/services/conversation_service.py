@@ -61,6 +61,36 @@ def save_exchange(video_id: str, question: str, answer: str):
     save_message(video_id, "assistant", answer)
 
 
+def list_conversations() -> list[dict]:
+    """列出所有有对话记录的视频，按最近更新排序"""
+    db = _conn()
+    rows = db.execute("""
+        SELECT
+            video_id,
+            COUNT(*) as msg_count,
+            MAX(timestamp) as last_time
+        FROM conversations
+        WHERE content_type IS NULL OR content_type != 'summary'
+        GROUP BY video_id
+        ORDER BY last_time DESC
+        LIMIT 100
+    """).fetchall()
+    db.close()
+
+    result = []
+    for r in rows:
+        from backend.main import video_states
+        state = video_states.get(r["video_id"], {})
+        title = state.get("original_name") or r["video_id"]
+        result.append({
+            "video_id": r["video_id"],
+            "title": title,
+            "msg_count": r["msg_count"],
+            "last_time": r["last_time"],
+        })
+    return result
+
+
 def get_history(video_id: str, limit: int = 20) -> list[dict]:
     """获取视频的对话历史"""
     db = _conn()
