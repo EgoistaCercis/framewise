@@ -252,6 +252,69 @@ def _parse_quiz(text: str) -> list[dict]:
     return questions
 
 
+async def prepare_rag_context(video_hash: str, question: str, video_id: str = None, top_k: int = None) -> tuple:
+    """
+    检索 + 构建 Prompt，返回 (user_prompt, results)
+    供流式和非流式共用
+    """
+    if top_k is None:
+        top_k = RAG_TOP_K
+
+    index, meta = load_index(video_hash)
+    query_embedding = await embed_single(question, video_id=video_id)
+    results = search(index, meta, query_embedding, top_k)
+
+    context_parts = []
+    for r in results:
+        c = r["chunk"]
+        time_range = f"【{_format_time(c['start_time'])}~{_format_time(c['end_time'])}】"
+        context_parts.append(f"{time_range} {c['text']}")
+    context = "\n\n".join(context_parts)
+
+    conv_ctx = await _get_conversation_context(video_id)
+    user_prompt = f"""{conv_ctx}以下是视频字幕中的相关片段：
+
+{context}
+
+用户问题：{question}
+
+请根据以上字幕内容和对话上下文回答用户问题。"""
+
+    return user_prompt, results
+
+
+async def prepare_frame_context(video_hash: str, question: str, frame_description: str,
+                                video_id: str = None, top_k: int = None) -> tuple:
+    """检索 + 构建画面问答 Prompt，返回 (user_prompt, results)"""
+    if top_k is None:
+        top_k = RAG_TOP_K
+
+    index, meta = load_index(video_hash)
+    query_embedding = await embed_single(question, video_id=video_id)
+    results = search(index, meta, query_embedding, top_k)
+
+    context_parts = []
+    for r in results:
+        c = r["chunk"]
+        context_parts.append(f"【{_format_time(c['start_time'])}~{_format_time(c['end_time'])}】{c['text']}")
+    context = "\n\n".join(context_parts)
+
+    conv_ctx = await _get_conversation_context(video_id)
+    user_prompt = f"""{conv_ctx}以下是视频字幕中的相关片段：
+
+{context}
+
+以下是用户暂停时画面内容的分析：
+
+{frame_description}
+
+用户问题：{question}
+
+请结合以上字幕内容、画面信息和对话上下文，综合回答用户问题。"""
+
+    return user_prompt, results
+
+
 async def _get_conversation_context(video_id: str) -> str:
     """加载对话上下文（含四层压缩）"""
     if not video_id:
@@ -268,10 +331,12 @@ async def _call_deepseek(user_prompt: str, video_id: str = None, system_prompt: 
     from backend.services.cost_service import log_usage
     from backend.services.provider_service import call_chat, get_provider
 
+    from backend.config import LLM_MAX_TOKENS
     provider, cfg = get_provider("chat")
     answer, usage = await call_chat(
         messages=[{"role": "user", "content": user_prompt}],
         system_prompt=system_prompt or SYSTEM_PROMPT,
+        max_tokens=LLM_MAX_TOKENS,
     )
 
     log_usage(

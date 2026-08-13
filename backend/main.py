@@ -481,7 +481,7 @@ async def ask_question(video_id: str, req: AskRequest):
 
     # 保存对话记录
     from backend.services.conversation_service import save_exchange
-    save_exchange(video_id, req.question, result["answer"])
+    save_exchange(video_id, req.question, result["answer"], references=result["references"])
 
     return {
         "video_id": video_id,
@@ -490,6 +490,60 @@ async def ask_question(video_id: str, req: AskRequest):
         "references": result["references"],
         "timestamp": req.timestamp,
     }
+
+
+@app.post("/api/videos/{video_id}/ask_stream")
+async def ask_stream(video_id: str, req: AskRequest):
+    """流式文本问答：SSE 推送 token"""
+    from fastapi.responses import StreamingResponse
+    import json
+
+    state = video_states.get(video_id)
+    if not state:
+        raise HTTPException(404, "视频不存在")
+    if state["status"] != "ready":
+        raise HTTPException(400, f"视频尚未处理完成，当前状态: {state['status']}")
+
+    from backend.services.rag_service import prepare_rag_context, SYSTEM_PROMPT
+
+    try:
+        user_prompt, results = await prepare_rag_context(
+            video_hash=state["video_hash"],
+            question=req.question,
+            video_id=video_id,
+        )
+    except FileNotFoundError:
+        raise HTTPException(410, "索引丢失，请重新处理该视频")
+
+    refs = [{"text": r["chunk"]["text"], "start_time": r["chunk"]["start_time"],
+              "end_time": r["chunk"]["end_time"], "score": r["score"]} for r in results]
+
+    async def generate():
+        from backend.services.provider_service import call_chat_stream
+        from backend.config import LLM_MAX_TOKENS
+        full = ""
+        try:
+            async for token in call_chat_stream(
+                messages=[{"role": "user", "content": user_prompt}],
+                system_prompt=SYSTEM_PROMPT,
+                max_tokens=LLM_MAX_TOKENS,
+            ):
+                full += token
+                yield f"data: {json.dumps({'token': token})}\n\n".encode()
+        except RuntimeError as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n".encode()
+            return
+
+        # 保存对话记录
+        from backend.services.conversation_service import save_exchange
+        save_exchange(video_id, req.question, full, references=refs)
+        yield f"data: {json.dumps({'done': True, 'references': refs})}\n\n".encode()
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/videos/{video_id}/frame")
@@ -570,7 +624,7 @@ async def ask_with_frame(video_id: str, req: AskFrameRequest):
 
     # 保存对话记录
     from backend.services.conversation_service import save_exchange
-    save_exchange(video_id, req.question, result["answer"])
+    save_exchange(video_id, req.question, result["answer"], references=result["references"])
 
     return {
         "video_id": video_id,
@@ -580,6 +634,90 @@ async def ask_with_frame(video_id: str, req: AskFrameRequest):
         "references": result["references"],
         "frame_description": result.get("frame_description", frame_result["description"]),
     }
+
+
+async def _analyze_frame_req(video_id: str, state: dict, req: AskFrameRequest) -> str:
+    """提取帧并分析画面，返回描述文本"""
+    from backend.services.vision_service import process_frame_question, analyze_frame
+
+    if req.frame_base64:
+        import base64, tempfile
+        frame_data = base64.b64decode(req.frame_base64)
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            tmp.write(frame_data)
+            frame_path = tmp.name
+        try:
+            return await analyze_frame(frame_path, video_id=video_id)
+        finally:
+            os.unlink(frame_path)
+    elif state.get("is_url_mode"):
+        from backend.services.url_service import download_frame_at_time
+        frame_path = download_frame_at_time(state["url"], req.timestamp, video_id)
+        return await analyze_frame(frame_path, video_id=video_id)
+    else:
+        frame_result = await process_frame_question(
+            video_path=state["video_path"],
+            video_hash=state["video_hash"],
+            timestamp=req.timestamp,
+            question=req.question,
+        )
+        return frame_result["description"]
+
+
+@app.post("/api/videos/{video_id}/ask_frame_stream")
+async def ask_frame_stream(video_id: str, req: AskFrameRequest):
+    """画面问答流式：先分析画面，再流式输出 LLM 回答"""
+    from fastapi.responses import StreamingResponse
+    import json
+
+    state = video_states.get(video_id)
+    if not state:
+        raise HTTPException(404, "视频不存在")
+    if state["status"] != "ready":
+        raise HTTPException(400, f"视频尚未处理完成，当前状态: {state['status']}")
+
+    from backend.services.rag_service import prepare_frame_context, SYSTEM_PROMPT
+
+    # 先分析画面（非流式，耗时）
+    try:
+        description = await _analyze_frame_req(video_id, state, req)
+        user_prompt, results = await prepare_frame_context(
+            video_hash=state["video_hash"],
+            question=req.question,
+            frame_description=description,
+            video_id=video_id,
+        )
+    except RuntimeError as e:
+        raise HTTPException(503, detail=str(e))
+
+    refs = [{"text": r["chunk"]["text"], "start_time": r["chunk"]["start_time"],
+              "end_time": r["chunk"]["end_time"], "score": r["score"]} for r in results]
+
+    async def generate():
+        from backend.services.provider_service import call_chat_stream
+        from backend.config import LLM_MAX_TOKENS
+        full = ""
+        try:
+            async for token in call_chat_stream(
+                messages=[{"role": "user", "content": user_prompt}],
+                system_prompt=SYSTEM_PROMPT,
+                max_tokens=LLM_MAX_TOKENS,
+            ):
+                full += token
+                yield f"data: {json.dumps({'token': token})}\n\n".encode()
+        except RuntimeError as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n".encode()
+            return
+
+        from backend.services.conversation_service import save_exchange
+        save_exchange(video_id, req.question, full, references=refs)
+        yield f"data: {json.dumps({'done': True, 'references': refs, 'frame_description': description})}\n\n".encode()
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/videos/{video_id}/file")

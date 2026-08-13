@@ -147,6 +147,50 @@ async def call_chat(messages: list[dict], system_prompt: str = None,
         raise RuntimeError(_translate_api_error(e, provider)) from e
 
 
+async def call_chat_stream(messages: list[dict], system_prompt: str = None,
+                            temperature: float = 0.7, max_tokens: int = 1024,
+                            provider: str = None):
+    """流式 LLM 对话，异步 yield 每个 token 文本"""
+    import json
+    if provider is None:
+        provider, cfg = get_provider("chat")
+    else:
+        cfg = PROVIDERS[provider]["chat"]
+
+    headers = {
+        "Authorization": f"Bearer {cfg['api_key']}",
+        "Content-Type": "application/json",
+    }
+    msgs = []
+    if system_prompt:
+        msgs.append({"role": "system", "content": system_prompt})
+    msgs.extend(messages)
+
+    payload = {
+        "model": cfg["model"],
+        "messages": msgs,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": True,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            async with client.stream("POST", cfg["endpoint"], json=payload, headers=headers) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        try:
+                            chunk = json.loads(line[6:])
+                            delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                            if delta:
+                                yield delta
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            continue
+    except Exception as e:
+        raise RuntimeError(_translate_api_error(e, provider)) from e
+
+
 async def call_embedding(texts: list[str], provider: str = None) -> list[list[float]]:
     """调用 Embedding 模型，返回向量列表"""
     if not texts:
