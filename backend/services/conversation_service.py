@@ -38,27 +38,36 @@ def init():
         db.execute("ALTER TABLE conversations ADD COLUMN content_type TEXT DEFAULT 'message'")
     except sqlite3.OperationalError:
         pass  # 已存在
+    # 迁移：添加 references 字段（v3）
+    try:
+        db.execute("ALTER TABLE conversations ADD COLUMN references_json TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass  # 已存在
     db.execute("CREATE INDEX IF NOT EXISTS idx_conv_video ON conversations(video_id, timestamp)")
     db.commit()
     db.close()
 
 
-def save_message(video_id: str, role: str, content: str, content_type: str = "message"):
+def save_message(video_id: str, role: str, content: str, content_type: str = "message",
+                 references: list = None):
     """保存一条对话"""
+    import json as _json
+    refs_json = _json.dumps(references, ensure_ascii=False) if references else ""
     db = _conn()
     db.execute(
-        "INSERT INTO conversations (video_id, role, content, content_type, timestamp) VALUES (?, ?, ?, ?, ?)",
-        (video_id, role, content, content_type, datetime.now().isoformat())
+        "INSERT INTO conversations (video_id, role, content, content_type, references_json, timestamp) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (video_id, role, content, content_type, refs_json, datetime.now().isoformat())
     )
     db.commit()
     db.close()
     logger.debug(f"[{video_id}] {role} ({content_type}): {content[:60]}...")
 
 
-def save_exchange(video_id: str, question: str, answer: str):
+def save_exchange(video_id: str, question: str, answer: str, references: list = None):
     """保存一轮问答"""
     save_message(video_id, "user", question)
-    save_message(video_id, "assistant", answer)
+    save_message(video_id, "assistant", answer, references=references)
 
 
 def list_conversations() -> list[dict]:
@@ -93,19 +102,31 @@ def list_conversations() -> list[dict]:
 
 def get_history(video_id: str, limit: int = 20) -> list[dict]:
     """获取视频的对话历史"""
+    import json as _json
     db = _conn()
     rows = db.execute(
-        "SELECT role, content, content_type, timestamp FROM conversations "
+        "SELECT role, content, content_type, references_json, timestamp FROM conversations "
         "WHERE video_id = ? AND content_type != 'summary' "
         "ORDER BY timestamp ASC LIMIT ?",
         (video_id, limit)
     ).fetchall()
     db.close()
-    return [
-        {"role": r["role"], "content": r["content"], "content_type": r["content_type"] or "message",
-         "timestamp": r["timestamp"]}
-        for r in rows
-    ]
+    result = []
+    for r in rows:
+        refs = []
+        if r["references_json"]:
+            try:
+                refs = _json.loads(r["references_json"])
+            except (ValueError, TypeError):
+                refs = []
+        result.append({
+            "role": r["role"],
+            "content": r["content"],
+            "content_type": r["content_type"] or "message",
+            "references": refs,
+            "timestamp": r["timestamp"],
+        })
+    return result
 
 
 # ═══════════════════════════════════════════

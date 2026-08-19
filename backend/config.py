@@ -29,6 +29,8 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "deepseek")
 LLM_ENDPOINT = os.getenv("LLM_ENDPOINT", "https://api.deepseek.com/v1/chat/completions")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-v4-pro")
+# 推理模型需要更大 max_tokens（reasoning + 回答）
+LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))
 
 # Embedding
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "siliconflow")

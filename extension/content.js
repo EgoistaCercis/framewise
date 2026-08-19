@@ -165,7 +165,7 @@
         return t;
     }
     function fmt(s) { var m = Math.floor(s / 60), sec = Math.floor(s % 60); return String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0"); }
-    function addMsg(type, content) { var c = document.getElementById("fw-msgs"), div = document.createElement("div"); var colors = { system: "rgba(255,255,255,0.04);color:#999", user: "#6c5ce7;color:#fff;align-self:flex-end;max-width:85%", assistant: "rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);max-width:85%", error: "#e74c3c;color:#fff" }; div.style.cssText = (colors[type] || colors.system) + ";padding:8px 10px;border-radius:6px;margin-bottom:6px;font-size:12px;line-height:1.5;word-break:break-word;min-width:0;max-width:100%;"; div.innerHTML = content; c.appendChild(div); c.scrollTop = c.scrollHeight; }
+    function addMsg(type, content) { var c = document.getElementById("fw-msgs"), div = document.createElement("div"); var colors = { system: "rgba(255,255,255,0.04);color:#999", user: "#6c5ce7;color:#fff;align-self:flex-end;max-width:85%", assistant: "rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);max-width:85%", error: "#e74c3c;color:#fff" }; div.style.cssText = (colors[type] || colors.system) + ";padding:8px 10px;border-radius:6px;margin-bottom:6px;font-size:12px;line-height:1.5;word-break:break-word;min-width:0;max-width:100%;"; div.innerHTML = content; c.appendChild(div); c.scrollTop = c.scrollHeight; return div; }
 
     // ── 定时任务 ──
     setInterval(function () { if (!window._fwReady) return; var t = getCurrentTime(); document.getElementById("fw-time").textContent = fmt(t); var paused = (document.querySelector("video") || {}).paused; var lbl = document.getElementById("fw-mode-lbl"); if (lbl) { lbl.textContent = paused ? "🖼️ 画面" : "📝 文本"; lbl.style.color = paused ? "#00d2a0" : "#999"; } }, 1000);
@@ -177,10 +177,80 @@
     function pollStatus() { (function check() { if (!videoId) { setTimeout(check, 3000); return; } fetch(API_BASE + "/api/videos/" + videoId).then(function (r) { return r.json(); }).then(function (data) { if (data.status === "ready") { readyState(data); return; } if (data.status === "error") { updateStatus("❌ 失败"); return; } if (data.status === "subtitles") { updateStatus("📝 字幕已缓存"); updateProgress({progress: 30, progress_text: "字幕已缓存，点击 🔄 处理"}); setTimeout(check, 2000); return; } if (data.progress) updateProgress(data); setTimeout(check, 2000); }).catch(function () { setTimeout(check, 5000); }); })(); }
     function readyState(data) { window._fwReady = true; updateStatus("✅ 就绪 (" + (data.chunk_count || "?") + "片段)"); document.getElementById("fw-input").disabled = false; document.getElementById("fw-send").disabled = false; document.getElementById("fw-msgs").innerHTML = '<div style="color:#00d2a0;text-align:center;padding:20px 0;">✅ 视频已就绪，开始提问吧！</div>'; loadHistory(); }
     function updateProgress(data) { var pct = data.progress || 0; var text = data.progress_text || "处理中..."; updateStatus(text + " " + pct + "%"); var c = document.getElementById("fw-msgs"); if (c) { var hint = pct < 40 ? '<div style="text-align:center;font-size:11px;color:#999;margin-bottom:8px;">💡 点击 <b style="color:#00a1d6;">AI字幕</b>，获取精准回答</div>' : ''; c.innerHTML = '<div style="text-align:center;padding:20px 0;">' + hint + '<div style="font-size:13px;color:#999;margin-bottom:10px;">' + text + '</div><div style="background:rgba(255,255,255,0.08);border-radius:10px;height:8px;overflow:hidden;max-width:280px;margin:0 auto;"><div style="background:linear-gradient(90deg,#6c5ce7,#00d2a0);height:100%;width:' + pct + '%;border-radius:10px;transition:width 1s;"></div></div><div style="font-size:12px;color:#666;margin-top:6px;">' + pct + '%</div></div>'; } }
-    function loadHistory() { fetch(API_BASE + "/api/videos/" + videoId + "/history?limit=30").then(function (r) { return r.json(); }).then(function (data) { if (!data || !data.length) return; var c = document.getElementById("fw-msgs"); c.innerHTML = ""; data.forEach(function (m) { if (m.role === "user") addMsg("user", esc(m.content)); else if (m.role === "assistant") addMsg("assistant", renderMd(m.content)); }); }).catch(function () { }); }
+    function loadHistory() { fetch(API_BASE + "/api/videos/" + videoId + "/history?limit=30").then(function (r) { return r.json(); }).then(function (data) { if (!data || !data.length) return; var c = document.getElementById("fw-msgs"); c.innerHTML = ""; data.forEach(function (m) { if (m.role === "user") { addMsg("user", esc(m.content)); } else if (m.role === "assistant") { addMsg("assistant", renderMd(m.content) + renderRefs(m.references)); } }); }).catch(function () { }); }
 
     // ── 发送问题 ──
-    function sendQuestion() { if (!videoId) return; var inp = document.getElementById("fw-input"), q = inp.value.trim(); if (!q || !window._fwReady || isProcessing) return; isProcessing = true; inp.disabled = true; document.getElementById("fw-send").disabled = true; inp.value = ""; inp.style.height = "auto"; var paused = (document.querySelector("video") || {}).paused; var isVision = paused, t = getCurrentTime(); addMsg("user", (isVision ? "🖼️ " : "") + q); var endpoint = isVision ? "ask_frame" : "ask"; var body = { question: q, timestamp: t }; if (isVision) { var frame = captureFrame(); if (frame) body.frame_base64 = frame; } fetch(API_BASE + "/api/videos/" + videoId + "/" + endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(function (r) { return r.json(); }).then(function (data) { var h = renderMd(data.answer); if (data.frame_description) h = '<span style="background:#e17055;color:#fff;padding:1px 6px;border-radius:3px;font-size:10px;">🖼️ 画面</span><br>' + h; if (data.references && data.references.length > 0) { h += '<div style="margin-top:8px;font-size:11px;color:#999;">📖 '; var seen = {}; data.references.forEach(function (ref) { var k = ref.start_time + "-" + ref.end_time; if (seen[k]) return; seen[k] = true; h += '<span style="background:#00d2a0;color:#0f0f1a;padding:1px 6px;border-radius:3px;font-size:10px;margin:1px;cursor:pointer;" onclick="try{if(window.player&&window.player.seek)window.player.seek(' + ref.start_time + ');else{var v=document.querySelector(\'video\');if(v)v.currentTime=' + ref.start_time + ';}}catch(e){}">' + fmt(ref.start_time) + '~' + fmt(ref.end_time) + '</span> '; }); h += '</div>'; } addMsg("assistant", h); }).catch(function (e) { addMsg("error", e.message || "请求失败"); }).finally(function () { inp.disabled = false; document.getElementById("fw-send").disabled = false; inp.focus(); isProcessing = false; }); }
+    function renderRefs(refs) {
+        if (!refs || !refs.length) return "";
+        var h = '<div style="margin-top:8px;font-size:11px;color:#999;">📖 ';
+        var seen = {};
+        refs.forEach(function (ref) {
+            var k = ref.start_time + "-" + ref.end_time;
+            if (seen[k]) return;
+            seen[k] = true;
+            var s = ref.start_time;
+            h += '<span onclick="try{if(window.player&&window.player.seek)window.player.seek(' + s + ');else{var v=document.querySelector(\'video\');if(v)v.currentTime=' + s + ';}}catch(e){}" style="background:#00d2a0;color:#0f0f1a;padding:1px 6px;border-radius:3px;font-size:10px;margin:1px;cursor:pointer;">' + fmt(ref.start_time) + "~" + fmt(ref.end_time) + "</span> ";
+        });
+        return h + "</div>";
+    }
+
+    function sendQuestion() {
+        if (!videoId) return;
+        var inp = document.getElementById("fw-input"), q = inp.value.trim();
+        if (!q || !window._fwReady || isProcessing) return;
+        isProcessing = true;
+        inp.disabled = true;
+        document.getElementById("fw-send").disabled = true;
+        inp.value = "";
+        inp.style.height = "auto";
+        var paused = (document.querySelector("video") || {}).paused;
+        var isVision = paused, t = getCurrentTime();
+        addMsg("user", (isVision ? "🖼️ " : "") + q);
+
+        function finish() { inp.disabled = false; document.getElementById("fw-send").disabled = false; inp.focus(); isProcessing = false; }
+
+        // 画面模式：走流式 ask_frame_stream（先分析画面，再流式回答）
+        var body2 = { question: q, timestamp: t };
+        if (isVision) {
+            var frame = captureFrame();
+            if (frame) body2.frame_base64 = frame;
+        }
+        var bubble = addMsg("assistant", '<span style="color:#999;">🖼️ 分析画面中...</span>');
+        var full = "", finalRefs = [];
+        var endpoint = isVision ? "ask_frame_stream" : "ask_stream";
+        fetch(API_BASE + "/api/videos/" + videoId + "/" + endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body2) })
+            .then(function (r) {
+                if (!r.ok) { throw new Error("HTTP " + r.status); }
+                var reader = r.body.getReader();
+                var decoder = new TextDecoder();
+                var buffer = "";
+                function pump() {
+                    return reader.read().then(function (result) {
+                        if (result.done) {
+                            bubble.innerHTML = renderMd(full) + renderRefs(finalRefs);
+                            finish();
+                            return;
+                        }
+                        buffer += decoder.decode(result.value, { stream: true });
+                        var lines = buffer.split("\n");
+                        buffer = lines.pop();
+                        for (var i = 0; i < lines.length; i++) {
+                            var line = lines[i];
+                            if (line.indexOf("data: ") !== 0) continue;
+                            try {
+                                var d = JSON.parse(line.substring(6));
+                                if (d.token) { full += d.token; bubble.innerHTML = renderMd(full); }
+                                else if (d.done) { finalRefs = d.references || []; }
+                                else if (d.error) { bubble.innerHTML = "❌ " + d.error; }
+                            } catch (e) {}
+                        }
+                        return pump();
+                    });
+                }
+                return pump();
+            })
+            .catch(function (e) { bubble.innerHTML = "❌ " + ((e && e.message) || "请求失败"); finish(); });
+    }
     function captureFrame() { try { var v = document.querySelector("video"); if (!v || v.videoWidth === 0) return null; var c = document.createElement("canvas"); c.width = v.videoWidth; c.height = v.videoHeight; c.getContext("2d").drawImage(v, 0, 0); return c.toDataURL("image/jpeg", 0.7).replace(/^data:image\/jpeg;base64,/, ""); } catch (e) { return null; } }
 
     console.log("[帧知] v3 loaded (with ServiceWorker subtitle capture)");
