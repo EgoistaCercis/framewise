@@ -272,7 +272,8 @@ async def prepare_rag_context(video_hash: str, question: str, video_id: str = No
     context = "\n\n".join(context_parts)
 
     conv_ctx = await _get_conversation_context(video_id)
-    user_prompt = f"""{conv_ctx}以下是视频字幕中的相关片段：
+    mem_ctx = _get_memory_context()
+    user_prompt = f"""{mem_ctx}{conv_ctx}以下是视频字幕中的相关片段：
 
 {context}
 
@@ -300,7 +301,8 @@ async def prepare_frame_context(video_hash: str, question: str, frame_descriptio
     context = "\n\n".join(context_parts)
 
     conv_ctx = await _get_conversation_context(video_id)
-    user_prompt = f"""{conv_ctx}以下是视频字幕中的相关片段：
+    mem_ctx = _get_memory_context()
+    user_prompt = f"""{mem_ctx}{conv_ctx}以下是视频字幕中的相关片段：
 
 {context}
 
@@ -313,6 +315,65 @@ async def prepare_frame_context(video_hash: str, question: str, frame_descriptio
 请结合以上字幕内容、画面信息和对话上下文，综合回答用户问题。"""
 
     return user_prompt, results
+
+
+def _get_memory_context() -> str:
+    """加载长期记忆（用户偏好等），拼入 Prompt"""
+    try:
+        from backend.services.memory_service import format_memories_for_prompt
+        return format_memories_for_prompt()
+    except Exception:
+        return ""
+
+
+async def extract_memory(question: str, answer: str):
+    """
+    从一轮问答中提取值得长期记住的信息（用户偏好、学习主题等）
+    调用 LLM 提取，结果存到 memory
+    """
+    from backend.services.memory_service import set_memory
+    from backend.services.provider_service import call_chat
+    from backend.config import LLM_MAX_TOKENS
+
+    # 对话太短不值得提取
+    if len(question) < 5 or len(answer) < 20:
+        return
+
+    prompt = f"""从下面的视频学习对话中，提取值得长期记住的用户信息。
+
+只提取以下两类，其他忽略：
+1. 用户偏好：回答风格（简洁/详细）、语言偏好、是否需要举例等
+2. 学习主题：用户正在学习什么（如 Transformer、RAG、机器学习等）
+
+如果对话中没有明显的偏好或学习主题，输出"无"。
+
+格式（每行一条，不要序号）：
+偏好：xxx
+主题：xxx
+
+用户问题：{question}
+
+AI回答：{answer[:300]}"""
+
+    try:
+        result, _ = await call_chat(
+            messages=[{"role": "user", "content": prompt}],
+            system_prompt="你是记忆提取助手，只输出用户偏好和学习主题，没有则输出'无'。",
+            max_tokens=200,
+        )
+        text = result.strip()
+        if text == "无" or not text:
+            return
+
+        # 解析并存储
+        for line in text.split("\n"):
+            line = line.strip()
+            if line.startswith("偏好：") and len(line) > 3:
+                set_memory("user_preference", line[3:])
+            elif line.startswith("主题：") and len(line) > 3:
+                set_memory("learning_topic", line[3:])
+    except Exception as e:
+        logger.debug(f"Memory extraction failed: {e}")
 
 
 async def _get_conversation_context(video_id: str) -> str:

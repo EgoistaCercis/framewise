@@ -145,6 +145,22 @@ async def health():
     return {"status": "ok", "version": "0.1.0"}
 
 
+@app.get("/api/memory")
+async def list_memory():
+    """查看长期记忆"""
+    from backend.services.memory_service import get_all_memories
+    return get_all_memories()
+
+
+@app.delete("/api/memory")
+async def clear_memory():
+    """清空长期记忆"""
+    from backend.services.memory_service import get_all_memories, delete_memory
+    for m in get_all_memories():
+        delete_memory(m["key"])
+    return {"status": "ok"}
+
+
 # ═══════════════════════════════════════════
 # 用量统计 API
 # ═══════════════════════════════════════════
@@ -483,6 +499,11 @@ async def ask_question(video_id: str, req: AskRequest):
     from backend.services.conversation_service import save_exchange
     save_exchange(video_id, req.question, result["answer"], references=result["references"])
 
+    # 提取长期记忆（后台不阻塞）
+    import asyncio
+    from backend.services.rag_service import extract_memory
+    asyncio.create_task(extract_memory(req.question, result["answer"]))
+
     return {
         "video_id": video_id,
         "question": req.question,
@@ -537,6 +558,9 @@ async def ask_stream(video_id: str, req: AskRequest):
         # 保存对话记录
         from backend.services.conversation_service import save_exchange
         save_exchange(video_id, req.question, full, references=refs)
+        import asyncio as _aio
+        from backend.services.rag_service import extract_memory
+        _aio.create_task(extract_memory(req.question, full))
         yield f"data: {json.dumps({'done': True, 'references': refs})}\n\n".encode()
 
     return StreamingResponse(
@@ -711,6 +735,9 @@ async def ask_frame_stream(video_id: str, req: AskFrameRequest):
 
         from backend.services.conversation_service import save_exchange
         save_exchange(video_id, req.question, full, references=refs)
+        import asyncio as _aio
+        from backend.services.rag_service import extract_memory
+        _aio.create_task(extract_memory(req.question, full))
         yield f"data: {json.dumps({'done': True, 'references': refs, 'frame_description': description})}\n\n".encode()
 
     return StreamingResponse(
