@@ -125,19 +125,26 @@
         // 字幕拦截到只上传缓存，不自动触发索引（等用户手动或autoMode）
         var url = e.detail;
         if (_subDone) return;
+        if (!videoId) { initVideo(); }
+        console.log("[帧知] 字幕已拦截，上传缓存:", url.substring(0,80)+"...");
+        // 携带真实页面 Referer，否则后端下载 ai_subtitle 会 403
+        uploadSubtitleUrl(url, cleanUrl(location.href));
+    });
+
+    function uploadSubtitleUrl(url, referer) {
+        if (!url || _subDone) return;
         _subDone = true;
         if (!videoId) { initVideo(); }
         (function waitAndUpload() {
             if (!videoId) { setTimeout(waitAndUpload, 500); return; }
-            console.log("[帧知] 字幕已拦截，上传缓存:", url.substring(0,80)+"...");
             fetch(API_BASE + "/api/videos/" + videoId + "/captured_subtitles_url", {
                 method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ subtitle_url: url }),
+                body: JSON.stringify({ subtitle_url: url, referer: referer || cleanUrl(location.href) }),
             }).then(function () {
                 updateStatus("📝 字幕已缓存");
             }).catch(function () {});
         })();
-    });
+    }
 
     // 3. DOM script 标签扫描（兜底）
     setInterval(function () {

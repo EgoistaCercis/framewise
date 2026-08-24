@@ -183,12 +183,18 @@ async def captured_subtitles_url(video_id: str, req: dict):
         raise HTTPException(400, "字幕URL为空")
     if url.startswith("//"): url = "https:" + url
 
-    logger.info(f"[{video_id}] Downloading B站 subtitle...")
-    async with httpx.AsyncClient(timeout=30) as client:
+    # B站 ai_subtitle 的 auth_key 签名绑定具体视频页面，Referer 必须是该页面否则 403
+    referer = req.get("referer", "") or "https://www.bilibili.com/"
+    if "bilibili.com" not in referer:
+        referer = "https://www.bilibili.com/"
+
+    logger.info(f"[{video_id}] Downloading B站 subtitle (referer={referer[:60]}...)")
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
         resp = await client.get(url, headers={
-            "Referer": "https://www.bilibili.com/",
-            "User-Agent": "Mozilla/5.0",
+            "Referer": referer,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
             "Origin": "https://www.bilibili.com",
+            "Accept": "application/json, text/plain, */*",
         })
         resp.raise_for_status()
         sub_data = resp.json()
