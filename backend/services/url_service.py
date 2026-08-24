@@ -72,7 +72,11 @@ def _extract_bilibili_subtitles_api(bvid: str, p: int = 1) -> list[dict] | None:
         sub_info = next((s for s in sub_data if "zh" in s.get("lan_doc", "").lower()), sub_data[0])
         sub_url = "https:" + sub_info["subtitle_url"] if sub_info["subtitle_url"].startswith("//") else sub_info["subtitle_url"]
 
-        r = httpx.get(sub_url, timeout=15)
+        r = httpx.get(sub_url, timeout=15, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36",
+            "Referer": f"https://www.bilibili.com/video/{bvid}",
+            "Origin": "https://www.bilibili.com",
+        })
         r.raise_for_status()
         body = r.json()["body"]
 
