@@ -45,3 +45,6 @@ extension/帧知.png
 
 # 评估文档
 evaluation/
+
+# codex本地配置
+.codex/
