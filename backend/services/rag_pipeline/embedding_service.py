@@ -3,9 +3,9 @@
 通过厂商标配层调用
 """
 from loguru import logger
-from backend.services.gateway import embed
-from backend.services.provider_service import get_provider
-from backend.services.cost_service import log_usage
+from backend.services.llm.gateway import embed
+from backend.services.llm.provider_service import get_provider
+from backend.services.llm.cost_service import log_usage
 from backend.config import SILICONFLOW_EMBEDDING_MODEL
 
 EMBEDDING_DIM = 1024  # BGE-M3 输出维度

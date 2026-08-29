@@ -86,7 +86,7 @@ def _transcribe_local(audio_path: str) -> list[dict]:
 
 async def _transcribe_api(audio_path: str) -> list[dict]:
     """硅基流动 SenseVoice API 转录"""
-    from backend.services.asr_api_service import transcribe_api
+    from backend.services.media.asr_api_service import transcribe_api
     logger.info("Using SiliconFlow SenseVoice ASR API...")
     return await transcribe_api(audio_path, SILICONFLOW_API_KEY, SILICONFLOW_BASE_URL)
 
@@ -96,7 +96,7 @@ async def process_video_to_subtitles(video_path: str, video_hash: str) -> list[d
     完整流程: 提取音频 → ASR转录 → 返回字幕
     """
     import tempfile
-    from backend.services.cache_service import (
+    from backend.services.media.cache_service import (
         subtitle_cache_exists, load_subtitle_cache, save_subtitle_cache
     )
 

@@ -7,8 +7,8 @@ import httpx
 from backend.config import (
     DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, RAG_TOP_K
 )
-from backend.services.embedding_service import embed_single
-from backend.services.vector_store import load_index, search
+from backend.services.rag_pipeline.embedding_service import embed_single
+from backend.services.rag_pipeline.vector_store import load_index, search
 
 SYSTEM_PROMPT = """你是视频学习助手"帧知"，帮助用户理解和学习视频内容。
 
@@ -188,8 +188,8 @@ async def generate_quiz(
 
     返回: {questions: [{question, answer}, ...], context_time: str}
     """
-    from backend.services.embedding_service import embed_single
-    from backend.services.vector_store import load_index, search
+    from backend.services.rag_pipeline.embedding_service import embed_single
+    from backend.services.rag_pipeline.vector_store import load_index, search
 
     index, meta = load_index(video_hash)
 
@@ -323,7 +323,7 @@ async def prepare_frame_context(video_hash: str, question: str, frame_descriptio
 def _get_memory_context() -> str:
     """加载长期记忆（用户偏好等），拼入 Prompt"""
     try:
-        from backend.services.memory_service import format_memories_for_prompt
+        from backend.services.memory.memory_service import format_memories_for_prompt
         return format_memories_for_prompt()
     except Exception:
         return ""
@@ -334,8 +334,8 @@ async def extract_memory(question: str, answer: str):
     从一轮问答中提取值得长期记住的信息（用户偏好、学习主题等）
     调用 LLM 提取，结果存到 memory
     """
-    from backend.services.memory_service import set_memory
-    from backend.services.gateway import chat
+    from backend.services.memory.memory_service import set_memory
+    from backend.services.llm.gateway import chat
     from backend.config import LLM_MAX_TOKENS
 
     # 对话太短不值得提取
@@ -384,7 +384,7 @@ async def _get_conversation_context(video_id: str) -> str:
     if not video_id:
         return ""
     try:
-        from backend.services.conversation_service import get_recent_context
+        from backend.services.rag_pipeline.conversation_service import get_recent_context
         return await get_recent_context(video_id)
     except Exception:
         return ""
@@ -396,9 +396,9 @@ async def _call_deepseek(user_prompt: str, video_id: str = None,
 
     smart=True 时使用独立的高阶模型（config.SMART_LLM_*，厂家可不同）。
     """
-    from backend.services.cost_service import log_usage
-    from backend.services.gateway import chat
-    from backend.services.provider_service import get_provider
+    from backend.services.llm.cost_service import log_usage
+    from backend.services.llm.gateway import chat
+    from backend.services.llm.provider_service import get_provider
     from backend import config
 
     from backend.config import LLM_MAX_TOKENS

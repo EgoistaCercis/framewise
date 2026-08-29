@@ -79,7 +79,7 @@ def log_usage(
     timestamp: str = None,
 ):
     """记录一次 API 调用（含 cached/reasoning 细分，成本按调用时刻价格计算）"""
-    from backend.services.pricing_service import compute_cost
+    from backend.services.llm.pricing_service import compute_cost
     cost = compute_cost(
         model, input_tokens, output_tokens,
         cached_tokens=cached_tokens, reasoning_tokens=reasoning_tokens,

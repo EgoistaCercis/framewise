@@ -43,7 +43,7 @@ async def startup_event():
     for vid, st in list(video_states.items()):
         if st.get("status") == "processing":
             # 检查磁盘缓存是否存在
-            from backend.services.cache_service import embedding_cache_exists
+            from backend.services.media.cache_service import embedding_cache_exists
             if embedding_cache_exists(vid):
                 st["status"] = "ready"
                 logger.info(f"Recovered {vid} from disk cache → ready")
@@ -164,14 +164,14 @@ async def llm_config():
 @app.get("/api/memory")
 async def list_memory():
     """查看长期记忆"""
-    from backend.services.memory_service import get_all_memories
+    from backend.services.memory.memory_service import get_all_memories
     return get_all_memories()
 
 
 @app.delete("/api/memory")
 async def clear_memory():
     """清空长期记忆"""
-    from backend.services.memory_service import get_all_memories, delete_memory
+    from backend.services.memory.memory_service import get_all_memories, delete_memory
     for m in get_all_memories():
         delete_memory(m["key"])
     return {"status": "ok"}
@@ -184,10 +184,10 @@ async def clear_memory():
 @app.post("/api/videos/{video_id}/captured_subtitles_url")
 async def captured_subtitles_url(video_id: str, req: dict):
     """接收浏览器拦截的B站字幕URL，下载、缓存、建立索引（一步到位）"""
-    from backend.services.chunk_service import chunk_subtitles
-    from backend.services.embedding_service import embed_texts
-    from backend.services.vector_store import build_index
-    from backend.services.cache_service import save_subtitle_cache
+    from backend.services.rag_pipeline.chunk_service import chunk_subtitles
+    from backend.services.rag_pipeline.embedding_service import embed_texts
+    from backend.services.rag_pipeline.vector_store import build_index
+    from backend.services.media.cache_service import save_subtitle_cache
     import httpx
 
     state = video_states.get(video_id)
@@ -242,10 +242,10 @@ async def captured_subtitles_url(video_id: str, req: dict):
 @app.post("/api/videos/{video_id}/captured_subtitles")
 async def captured_subtitles(video_id: str, req: dict):
     """接收Chrome插件采集的B站AI字幕"""
-    from backend.services.chunk_service import chunk_subtitles
-    from backend.services.embedding_service import embed_texts
-    from backend.services.vector_store import build_index
-    from backend.services.cache_service import save_subtitle_cache
+    from backend.services.rag_pipeline.chunk_service import chunk_subtitles
+    from backend.services.rag_pipeline.embedding_service import embed_texts
+    from backend.services.rag_pipeline.vector_store import build_index
+    from backend.services.media.cache_service import save_subtitle_cache
 
     state = video_states.get(video_id)
     if not state:
@@ -278,7 +278,7 @@ async def captured_subtitles(video_id: str, req: dict):
 @app.post("/api/videos/{video_id}/quiz")
 async def generate_quiz_endpoint(video_id: str, req: dict):
     """主动学习：根据当前视频位置生成考题"""
-    from backend.services.rag_service import generate_quiz
+    from backend.services.rag_pipeline.rag_service import generate_quiz
 
     state = video_states.get(video_id)
     if not state:
@@ -301,42 +301,42 @@ async def generate_quiz_endpoint(video_id: str, req: dict):
 @app.get("/api/videos/{video_id}/history")
 async def get_chat_history(video_id: str, limit: int = 50):
     """获取视频的聊天记录"""
-    from backend.services.conversation_service import get_history
+    from backend.services.rag_pipeline.conversation_service import get_history
     return get_history(video_id, limit)
 
 
 @app.get("/api/conversations")
 async def list_conversations():
     """列出所有有对话记录的视频"""
-    from backend.services.conversation_service import list_conversations
+    from backend.services.rag_pipeline.conversation_service import list_conversations
     return list_conversations()
 
 
 @app.get("/api/usage/today")
 async def usage_today():
     """今日用量统计"""
-    from backend.services.cost_service import get_today_stats
+    from backend.services.llm.cost_service import get_today_stats
     return get_today_stats()
 
 
 @app.get("/api/usage/total")
 async def usage_total():
     """总用量统计"""
-    from backend.services.cost_service import get_total_stats
+    from backend.services.llm.cost_service import get_total_stats
     return get_total_stats()
 
 
 @app.get("/api/usage/by_model")
 async def usage_by_model():
     """按模型分组统计"""
-    from backend.services.cost_service import get_stats_by_model
+    from backend.services.llm.cost_service import get_stats_by_model
     return get_stats_by_model()
 
 
 @app.get("/api/usage/history")
 async def usage_history(limit: int = 30):
     """最近调用记录"""
-    from backend.services.cost_service import get_history
+    from backend.services.llm.cost_service import get_history
     return get_history(limit)
 
 
@@ -357,14 +357,14 @@ class PricingUpdate(BaseModel):
 @app.get("/api/pricing")
 async def pricing_list():
     """查看所有模型的价格版本（含历史）"""
-    from backend.services.pricing_service import get_all
+    from backend.services.llm.pricing_service import get_all
     return get_all()
 
 
 @app.post("/api/pricing")
 async def pricing_update(req: PricingUpdate):
     """更新某模型为最新价（旧版本置为 inactive）"""
-    from backend.services.pricing_service import update_price
+    from backend.services.llm.pricing_service import update_price
     pid = update_price(
         req.model, req.input_ppm, req.output_ppm,
         cache_ppm=req.cache_ppm, reasoning_ppm=req.reasoning_ppm,
@@ -376,7 +376,7 @@ async def pricing_update(req: PricingUpdate):
 @app.post("/api/pricing/refresh")
 async def pricing_refresh(model: str = ""):
     """自动拉取最新价（预留接口，默认未接入）"""
-    from backend.services.pricing_service import fetch_latest_price
+    from backend.services.llm.pricing_service import fetch_latest_price
     if not model:
         return {"status": "not_implemented", "message": "请指定 model；自动拉价未接入"}
     price = fetch_latest_price(model)
@@ -391,7 +391,7 @@ async def process_url(background_tasks: BackgroundTasks, req: dict):
     从视频链接创建知识索引（仅下载音频，不存视频）
     Body: {url: "https://..."}
     """
-    from backend.services.url_service import get_video_info, download_audio
+    from backend.services.media.url_service import get_video_info, download_audio
 
     url = req.get("url", "").strip()
     if not url:
@@ -423,7 +423,7 @@ async def process_url(background_tasks: BackgroundTasks, req: dict):
             del video_states[video_id]
 
     # 检查磁盘缓存（服务重启后内存清空，但磁盘缓存还在）
-    from backend.services.cache_service import embedding_cache_exists, subtitle_cache_exists
+    from backend.services.media.cache_service import embedding_cache_exists, subtitle_cache_exists
     if embedding_cache_exists(video_id) or subtitle_cache_exists(video_id):
         logger.info(f"Video already indexed (disk cache): {video_id}")
         video_states[video_id] = {
@@ -540,7 +540,7 @@ async def get_subtitles(video_id: str):
 @app.post("/api/videos/{video_id}/ask")
 async def ask_question(video_id: str, req: AskRequest):
     """文本问答：基于字幕内容的RAG问答"""
-    from backend.services.rag_service import answer_text_question
+    from backend.services.rag_pipeline.rag_service import answer_text_question
 
     state = video_states.get(video_id)
     if not state:
@@ -566,12 +566,12 @@ async def ask_question(video_id: str, req: AskRequest):
         raise HTTPException(503, detail=error_msg)
 
     # 保存对话记录
-    from backend.services.conversation_service import save_exchange
+    from backend.services.rag_pipeline.conversation_service import save_exchange
     save_exchange(video_id, req.question, result["answer"], references=result["references"])
 
     # 提取长期记忆（后台不阻塞）
     import asyncio
-    from backend.services.rag_service import extract_memory
+    from backend.services.rag_pipeline.rag_service import extract_memory
     asyncio.create_task(extract_memory(req.question, result["answer"]))
 
     return {
@@ -595,7 +595,7 @@ async def ask_stream(video_id: str, req: AskRequest):
     if state["status"] != "ready":
         raise HTTPException(400, f"视频尚未处理完成，当前状态: {state['status']}")
 
-    from backend.services.rag_service import prepare_rag_context, SYSTEM_PROMPT
+    from backend.services.rag_pipeline.rag_service import prepare_rag_context, SYSTEM_PROMPT
 
     try:
         user_prompt, results = await prepare_rag_context(
@@ -610,7 +610,7 @@ async def ask_stream(video_id: str, req: AskRequest):
               "end_time": r["chunk"]["end_time"], "score": r["score"]} for r in results]
 
     async def generate():
-        from backend.services.gateway import chat_stream
+        from backend.services.llm.gateway import chat_stream
         from backend.config import LLM_MAX_TOKENS
         full = ""
         try:
@@ -627,10 +627,10 @@ async def ask_stream(video_id: str, req: AskRequest):
             return
 
         # 保存对话记录
-        from backend.services.conversation_service import save_exchange
+        from backend.services.rag_pipeline.conversation_service import save_exchange
         save_exchange(video_id, req.question, full, references=refs)
         import asyncio as _aio
-        from backend.services.rag_service import extract_memory
+        from backend.services.rag_pipeline.rag_service import extract_memory
         _aio.create_task(extract_memory(req.question, full))
         yield f"data: {json.dumps({'done': True, 'references': refs})}\n\n".encode()
 
@@ -652,11 +652,11 @@ async def get_frame(video_id: str, t: float):
 
     if state.get("is_url_mode"):
         # URL模式：从远程下载帧
-        from backend.services.url_service import download_frame_at_time
+        from backend.services.media.url_service import download_frame_at_time
         frame_path = download_frame_at_time(state["url"], t, video_id)
     else:
         # 本地模式：从本地视频截图
-        from backend.services.vision_service import extract_frame
+        from backend.services.media.vision_service import extract_frame
         frame_path = await extract_frame(
             video_path=state["video_path"],
             timestamp=t,
@@ -669,8 +669,8 @@ async def get_frame(video_id: str, t: float):
 @app.post("/api/videos/{video_id}/ask_frame")
 async def ask_with_frame(video_id: str, req: AskFrameRequest):
     """画面问答：截取当前帧 + 视觉分析 + RAG回答"""
-    from backend.services.vision_service import process_frame_question, analyze_frame
-    from backend.services.rag_service import answer_with_frame_context
+    from backend.services.media.vision_service import process_frame_question, analyze_frame
+    from backend.services.rag_pipeline.rag_service import answer_with_frame_context
 
     state = video_states.get(video_id)
     if not state:
@@ -693,7 +693,7 @@ async def ask_with_frame(video_id: str, req: AskFrameRequest):
         os.unlink(frame_path)
     elif state.get("is_url_mode"):
         # URL模式服务端截帧
-        from backend.services.url_service import download_frame_at_time
+        from backend.services.media.url_service import download_frame_at_time
         frame_path = download_frame_at_time(state["url"], req.timestamp, video_id)
         description = await analyze_frame(frame_path, video_id=video_id)
         frame_result = {"frame_path": frame_path, "description": description}
@@ -719,7 +719,7 @@ async def ask_with_frame(video_id: str, req: AskFrameRequest):
         raise HTTPException(503, detail=str(e))
 
     # 保存对话记录
-    from backend.services.conversation_service import save_exchange
+    from backend.services.rag_pipeline.conversation_service import save_exchange
     save_exchange(video_id, req.question, result["answer"], references=result["references"])
 
     return {
@@ -734,7 +734,7 @@ async def ask_with_frame(video_id: str, req: AskFrameRequest):
 
 async def _analyze_frame_req(video_id: str, state: dict, req: AskFrameRequest) -> str:
     """提取帧并分析画面，返回描述文本"""
-    from backend.services.vision_service import process_frame_question, analyze_frame
+    from backend.services.media.vision_service import process_frame_question, analyze_frame
 
     if req.frame_base64:
         import base64, tempfile
@@ -747,7 +747,7 @@ async def _analyze_frame_req(video_id: str, state: dict, req: AskFrameRequest) -
         finally:
             os.unlink(frame_path)
     elif state.get("is_url_mode"):
-        from backend.services.url_service import download_frame_at_time
+        from backend.services.media.url_service import download_frame_at_time
         frame_path = download_frame_at_time(state["url"], req.timestamp, video_id)
         return await analyze_frame(frame_path, video_id=video_id)
     else:
@@ -772,7 +772,7 @@ async def ask_frame_stream(video_id: str, req: AskFrameRequest):
     if state["status"] != "ready":
         raise HTTPException(400, f"视频尚未处理完成，当前状态: {state['status']}")
 
-    from backend.services.rag_service import prepare_frame_context, SYSTEM_PROMPT
+    from backend.services.rag_pipeline.rag_service import prepare_frame_context, SYSTEM_PROMPT
 
     # 先分析画面（非流式，耗时）
     try:
@@ -790,7 +790,7 @@ async def ask_frame_stream(video_id: str, req: AskFrameRequest):
               "end_time": r["chunk"]["end_time"], "score": r["score"]} for r in results]
 
     async def generate():
-        from backend.services.gateway import chat_stream
+        from backend.services.llm.gateway import chat_stream
         from backend.config import LLM_MAX_TOKENS
         full = ""
         try:
@@ -806,10 +806,10 @@ async def ask_frame_stream(video_id: str, req: AskFrameRequest):
             yield f"data: {json.dumps({'error': str(e)})}\n\n".encode()
             return
 
-        from backend.services.conversation_service import save_exchange
+        from backend.services.rag_pipeline.conversation_service import save_exchange
         save_exchange(video_id, req.question, full, references=refs)
         import asyncio as _aio
-        from backend.services.rag_service import extract_memory
+        from backend.services.rag_pipeline.rag_service import extract_memory
         _aio.create_task(extract_memory(req.question, full))
         yield f"data: {json.dumps({'done': True, 'references': refs, 'frame_description': description})}\n\n".encode()
 
@@ -866,11 +866,11 @@ def _canonical_video_id(url: str) -> str:
 
 async def _process_video_task(video_id: str):
     """后台处理视频：ASR → Chunk → Embedding → FAISS"""
-    from backend.services.cache_service import get_video_hash
-    from backend.services.asr_service import process_video_to_subtitles
-    from backend.services.chunk_service import chunk_subtitles
-    from backend.services.embedding_service import embed_texts
-    from backend.services.vector_store import build_index
+    from backend.services.media.cache_service import get_video_hash
+    from backend.services.media.asr_service import process_video_to_subtitles
+    from backend.services.rag_pipeline.chunk_service import chunk_subtitles
+    from backend.services.rag_pipeline.embedding_service import embed_texts
+    from backend.services.rag_pipeline.vector_store import build_index
 
     state = video_states.get(video_id)
     if not state:
@@ -916,13 +916,13 @@ async def _process_video_task(video_id: str):
 
 async def _process_url_task(video_id: str, url: str):
     """后台处理URL视频：获取音频直链 → ASR(URL直传) → Chunk → Embedding"""
-    from backend.services.url_service import download_audio, cleanup_audio, get_audio_stream_url, extract_subtitles
-    from backend.services.cache_service import save_subtitle_cache, subtitle_cache_exists, load_subtitle_cache
-    from backend.services.asr_service import transcribe
-    from backend.services.asr_api_service import transcribe_via_url
-    from backend.services.chunk_service import chunk_subtitles
-    from backend.services.embedding_service import embed_texts
-    from backend.services.vector_store import build_index
+    from backend.services.media.url_service import download_audio, cleanup_audio, get_audio_stream_url, extract_subtitles
+    from backend.services.media.cache_service import save_subtitle_cache, subtitle_cache_exists, load_subtitle_cache
+    from backend.services.media.asr_service import transcribe
+    from backend.services.media.asr_api_service import transcribe_via_url
+    from backend.services.rag_pipeline.chunk_service import chunk_subtitles
+    from backend.services.rag_pipeline.embedding_service import embed_texts
+    from backend.services.rag_pipeline.vector_store import build_index
 
     state = video_states.get(video_id)
     if not state:

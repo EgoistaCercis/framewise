@@ -6,7 +6,7 @@ from loguru import logger
 import numpy as np
 import faiss
 from backend.config import EMBEDDING_DIR, RAG_TOP_K
-from backend.services.cache_service import (
+from backend.services.media.cache_service import (
     embedding_cache_path, embedding_meta_path,
     embedding_cache_exists, save_embedding_meta, load_embedding_meta
 )

@@ -10,7 +10,7 @@
 网关按服务类型路由 base_url，调用点无需改动。
 
 用法：
-    from backend.services.gateway import chat, chat_stream, embed, vision, asr
+    from backend.services.llm.gateway import chat, chat_stream, embed, vision, asr
     text, usage = await chat(messages, system_prompt=..., max_tokens=8192)
     vecs = await embed([text])
     desc, usage = await vision(image_b64, "描述图片")
