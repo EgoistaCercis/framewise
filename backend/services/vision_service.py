@@ -46,14 +46,15 @@ async def extract_frame(video_path: str, timestamp: float, video_hash: str) -> s
 async def analyze_frame(frame_path: str, video_id: str = None) -> str:
     """使用视觉模型分析帧内容（通过厂商标配层）"""
     import base64
-    from backend.services.provider_service import call_vision, get_provider
+    from backend.services.gateway import vision
+    from backend.services.provider_service import get_provider
     from backend.services.cost_service import log_usage
 
     with open(frame_path, "rb") as f:
         image_data = base64.b64encode(f.read()).decode("utf-8")
 
     provider, cfg = get_provider("vision")
-    description, usage = await call_vision(image_data)
+    description, usage = await vision(image_data)
 
     log_usage(
         model=cfg["model"],

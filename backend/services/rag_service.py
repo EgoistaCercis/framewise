@@ -332,7 +332,7 @@ async def extract_memory(question: str, answer: str):
     调用 LLM 提取，结果存到 memory
     """
     from backend.services.memory_service import set_memory
-    from backend.services.provider_service import call_chat
+    from backend.services.gateway import chat
     from backend.config import LLM_MAX_TOKENS
 
     # 对话太短不值得提取
@@ -356,7 +356,7 @@ async def extract_memory(question: str, answer: str):
 AI回答：{answer[:300]}"""
 
     try:
-        result, _ = await call_chat(
+        result, _ = await chat(
             messages=[{"role": "user", "content": prompt}],
             system_prompt="你是记忆提取助手，只输出用户偏好和学习主题，没有则输出'无'。",
             max_tokens=200,
@@ -390,11 +390,12 @@ async def _get_conversation_context(video_id: str) -> str:
 async def _call_deepseek(user_prompt: str, video_id: str = None, system_prompt: str = None) -> str:
     """调用 LLM（通过厂商标配层），并记录 token 用量"""
     from backend.services.cost_service import log_usage
-    from backend.services.provider_service import call_chat, get_provider
+    from backend.services.gateway import chat
+    from backend.services.provider_service import get_provider
 
     from backend.config import LLM_MAX_TOKENS
     provider, cfg = get_provider("chat")
-    answer, usage = await call_chat(
+    answer, usage = await chat(
         messages=[{"role": "user", "content": user_prompt}],
         system_prompt=system_prompt or SYSTEM_PROMPT,
         max_tokens=LLM_MAX_TOKENS,

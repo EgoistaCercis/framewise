@@ -40,10 +40,13 @@ EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 
 # Vision
 VISION_PROVIDER = os.getenv("VISION_PROVIDER", "dashscope")
+# OpenAI 兼容 endpoint（支持 image_url 多模态），网关统一走此协议
+VISION_BASE_URL = os.getenv("VISION_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+# 旧专有 endpoint，仅保留兼容
 VISION_ENDPOINT = os.getenv("VISION_ENDPOINT", "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation")
 VISION_API_KEY = os.getenv("VISION_API_KEY", "")
 VISION_MODEL = os.getenv("VISION_MODEL", "qwen-vl-plus")
-VISION_FORMAT = os.getenv("VISION_FORMAT", "dashscope_vision")
+VISION_FORMAT = os.getenv("VISION_FORMAT", "openai_vision")
 
 # ASR
 ASR_PROVIDER = os.getenv("ASR_PROVIDER", "siliconflow")
@@ -67,7 +70,7 @@ DASHSCOPE_VL_MODEL = VISION_MODEL
 
 # 服务配置
 HOST = os.getenv("HOST", "0.0.0.0")
-PORT = int(os.getenv("PORT", "8000"))
+PORT = int(os.getenv("PORT", "8123"))
 
 # ASR 模式: "local" = faster-whisper, "api" = 硅基流动 SenseVoice
 ASR_MODE = os.getenv("ASR_MODE", "api")

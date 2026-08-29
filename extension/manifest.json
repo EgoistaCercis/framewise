@@ -11,9 +11,9 @@
     "*://*.bilibili.com/*",
     "*://*.hdslb.com/*",
     "*://www.youtube.com/*",
-    "http://localhost:8000/*",
-    "http://127.0.0.1:8000/*",
-    "http://host.docker.internal:8000/*"
+    "http://localhost:8123/*",
+    "http://127.0.0.1:8123/*",
+    "http://host.docker.internal:8123/*"
   ],
   "content_scripts": [
     {
