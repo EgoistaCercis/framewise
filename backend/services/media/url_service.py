@@ -11,7 +11,7 @@ import subprocess
 from pathlib import Path
 
 from backend.config import FFMPEG_PATH, DATA_DIR, ASR_MODE
-from backend.services.cache_service import frame_cache_path, frame_cache_exists
+from backend.services.media.cache_service import frame_cache_path, frame_cache_exists
 
 AUDIO_DIR = os.path.join(DATA_DIR, "audio")
 
@@ -264,7 +264,7 @@ def download_frame_at_time(url: str, timestamp: float, video_id: str) -> str:
     import yt_dlp
 
     from backend.config import FRAME_DIR
-    from backend.services.cache_service import frame_cache_path, frame_cache_exists
+    from backend.services.media.cache_service import frame_cache_path, frame_cache_exists
 
     # 检查缓存
     frame_path = frame_cache_path(video_id, timestamp)

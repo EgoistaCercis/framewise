@@ -8,7 +8,7 @@ from loguru import logger
 import subprocess
 import httpx
 from backend.config import DASHSCOPE_API_KEY, DASHSCOPE_VL_MODEL, FFMPEG_PATH
-from backend.services.cache_service import frame_cache_path, frame_cache_exists
+from backend.services.media.cache_service import frame_cache_path, frame_cache_exists
 
 
 async def extract_frame(video_path: str, timestamp: float, video_hash: str) -> str:
@@ -46,9 +46,9 @@ async def extract_frame(video_path: str, timestamp: float, video_hash: str) -> s
 async def analyze_frame(frame_path: str, video_id: str = None) -> str:
     """使用视觉模型分析帧内容（通过厂商标配层）"""
     import base64
-    from backend.services.gateway import vision
-    from backend.services.provider_service import get_provider
-    from backend.services.cost_service import log_usage
+    from backend.services.llm.gateway import vision
+    from backend.services.llm.provider_service import get_provider
+    from backend.services.llm.cost_service import log_usage
 
     with open(frame_path, "rb") as f:
         image_data = base64.b64encode(f.read()).decode("utf-8")
