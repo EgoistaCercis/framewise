@@ -143,12 +143,21 @@ async def _with_retry(fn, *, retries: int = MAX_RETRIES, desc: str = ""):
 
 # ── usage 归一化：SDK 对象 → 兼容 dict ─────────────────────
 def _usage_to_dict(usage) -> dict:
+    """提取 OpenAI usage 为兼容 dict，含 cached / reasoning 细粒度字段"""
     if usage is None:
         return {}
+
+    prompt_details = getattr(usage, "prompt_tokens_details", None)
+    completion_details = getattr(usage, "completion_tokens_details", None)
+    cached_tokens = getattr(prompt_details, "cached_tokens", 0) or 0
+    reasoning_tokens = getattr(completion_details, "reasoning_tokens", 0) or 0
+
     return {
         "prompt_tokens": getattr(usage, "prompt_tokens", 0),
         "completion_tokens": getattr(usage, "completion_tokens", 0),
         "total_tokens": getattr(usage, "total_tokens", 0),
+        "cached_tokens": cached_tokens,
+        "reasoning_tokens": reasoning_tokens,
     }
 
 
