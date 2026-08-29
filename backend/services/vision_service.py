@@ -62,6 +62,8 @@ async def analyze_frame(frame_path: str, video_id: str = None) -> str:
         call_type="vision",
         input_tokens=usage.get("input_tokens", 0),
         output_tokens=usage.get("output_tokens", 0),
+        cached_tokens=usage.get("cached_tokens", 0),
+        reasoning_tokens=usage.get("reasoning_tokens", 0),
         video_id=video_id,
     )
 

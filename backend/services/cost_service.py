@@ -11,21 +11,7 @@ from backend.config import DATA_DIR
 
 DB_PATH = os.path.join(DATA_DIR, "usage.db")
 
-# ── 各模型定价 (人民币/1K tokens) ──
-PRICING = {
-    # DeepSeek
-    "deepseek-chat":      {"input": 0.001,  "output": 0.002},   # ¥1/1M input, ¥2/1M output
-    # SiliconFlow Embedding
-    "BAAI/bge-m3":        {"input": 0.0007, "output": 0.0},     # ¥0.7/1M tokens
-    # DashScope Qwen VL
-    "qwen-vl-plus":       {"input": 0.0015, "output": 0.006},   # ¥1.5/1M input, ¥6/1M output
-    # SiliconFlow ASR
-    "FunAudioLLM/SenseVoiceSmall": {"input": 0.0005, "output": 0.0},  # 约 ¥0.5/1K tokens
-    # DashScope Paraformer ASR
-    "paraformer-v2":      {"input": 0.0008, "output": 0.0},
-    # 默认
-    "default":            {"input": 0.001,  "output": 0.002},
-}
+# 定价已迁移到 backend.services.pricing_service（带版本历史）
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -47,12 +33,35 @@ def init_db():
             video_id TEXT,
             input_tokens INTEGER NOT NULL DEFAULT 0,
             output_tokens INTEGER NOT NULL DEFAULT 0,
+            cached_tokens INTEGER NOT NULL DEFAULT 0,
+            reasoning_tokens INTEGER NOT NULL DEFAULT 0,
             input_cost REAL NOT NULL DEFAULT 0,
             output_cost REAL NOT NULL DEFAULT 0,
+            cache_cost REAL NOT NULL DEFAULT 0,
+            reasoning_cost REAL NOT NULL DEFAULT 0,
             total_cost REAL NOT NULL DEFAULT 0,
             metadata TEXT                   -- JSON: question摘要等
         )
     """)
+    conn.commit()
+    conn.close()
+
+    _migrate()
+
+
+def _migrate():
+    """给已存在的 usage_log 表补齐新增列（cached/reasoning）"""
+    conn = _get_conn()
+    for col, ddl in [
+        ("cached_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("reasoning_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("cache_cost", "REAL NOT NULL DEFAULT 0"),
+        ("reasoning_cost", "REAL NOT NULL DEFAULT 0"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE usage_log ADD COLUMN {col} {ddl}")
+        except sqlite3.OperationalError:
+            pass  # 列已存在
     conn.commit()
     conn.close()
 
@@ -65,38 +74,38 @@ def log_usage(
     output_tokens: int = 0,
     video_id: str = None,
     metadata: str = None,
+    cached_tokens: int = 0,
+    reasoning_tokens: int = 0,
+    timestamp: str = None,
 ):
-    """记录一次 API 调用"""
-    pricing = PRICING.get(model, PRICING["default"])
-    input_cost = (input_tokens / 1000) * pricing["input"]
-    output_cost = (output_tokens / 1000) * pricing["output"]
-    total_cost = input_cost + output_cost
+    """记录一次 API 调用（含 cached/reasoning 细分，成本按调用时刻价格计算）"""
+    from backend.services.pricing_service import compute_cost
+    cost = compute_cost(
+        model, input_tokens, output_tokens,
+        cached_tokens=cached_tokens, reasoning_tokens=reasoning_tokens,
+        timestamp=timestamp,
+    )
+    ts = timestamp or datetime.now().isoformat()
 
     conn = _get_conn()
     conn.execute("""
         INSERT INTO usage_log (timestamp, model, provider, call_type, video_id,
-                               input_tokens, output_tokens, input_cost, output_cost, total_cost, metadata)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               input_tokens, output_tokens, cached_tokens, reasoning_tokens,
+                               input_cost, output_cost, cache_cost, reasoning_cost, total_cost, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        datetime.now().isoformat(),
-        model,
-        provider,
-        call_type,
-        video_id,
-        input_tokens,
-        output_tokens,
-        round(input_cost, 6),
-        round(output_cost, 6),
-        round(total_cost, 6),
-        metadata,
+        ts, model, provider, call_type, video_id,
+        input_tokens, output_tokens, cached_tokens, reasoning_tokens,
+        cost["input_cost"], cost["output_cost"], cost["cache_cost"],
+        cost["reasoning_cost"], cost["total_cost"], metadata,
     ))
     conn.commit()
     conn.close()
 
     logger.info(
         f"[Cost] {provider}/{model} | {call_type} | "
-        f"in:{input_tokens} out:{output_tokens} | "
-        f"¥{total_cost:.4f}"
+        f"in:{input_tokens}(cache:{cached_tokens}) out:{output_tokens}(reason:{reasoning_tokens}) | "
+        f"¥{cost['total_cost']:.4f}"
     )
 
 

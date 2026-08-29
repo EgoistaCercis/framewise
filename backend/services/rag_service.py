@@ -421,6 +421,8 @@ async def _call_deepseek(user_prompt: str, video_id: str = None,
         call_type="chat",
         input_tokens=usage.get("prompt_tokens", 0),
         output_tokens=usage.get("completion_tokens", 0),
+        cached_tokens=usage.get("cached_tokens", 0),
+        reasoning_tokens=usage.get("reasoning_tokens", 0),
         video_id=video_id,
     )
 

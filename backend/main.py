@@ -340,6 +340,51 @@ async def usage_history(limit: int = 30):
     return get_history(limit)
 
 
+# ═══════════════════════════════════════════════════════
+# 定价（pricing 组件）
+# ═══════════════════════════════════════════════════════
+
+class PricingUpdate(BaseModel):
+    model: str
+    input_ppm: float
+    output_ppm: float
+    cache_ppm: float = 0
+    reasoning_ppm: float = 0
+    provider: str = ""
+    note: str = ""
+
+
+@app.get("/api/pricing")
+async def pricing_list():
+    """查看所有模型的价格版本（含历史）"""
+    from backend.services.pricing_service import get_all
+    return get_all()
+
+
+@app.post("/api/pricing")
+async def pricing_update(req: PricingUpdate):
+    """更新某模型为最新价（旧版本置为 inactive）"""
+    from backend.services.pricing_service import update_price
+    pid = update_price(
+        req.model, req.input_ppm, req.output_ppm,
+        cache_ppm=req.cache_ppm, reasoning_ppm=req.reasoning_ppm,
+        provider=req.provider, note=req.note,
+    )
+    return {"status": "ok", "id": pid, "model": req.model}
+
+
+@app.post("/api/pricing/refresh")
+async def pricing_refresh(model: str = ""):
+    """自动拉取最新价（预留接口，默认未接入）"""
+    from backend.services.pricing_service import fetch_latest_price
+    if not model:
+        return {"status": "not_implemented", "message": "请指定 model；自动拉价未接入"}
+    price = fetch_latest_price(model)
+    if price is None:
+        return {"status": "not_implemented", "message": f"自动拉价未接入：{model}"}
+    return {"status": "ok", "model": model, "price": price}
+
+
 @app.post("/api/videos/from_url")
 async def process_url(background_tasks: BackgroundTasks, req: dict):
     """
