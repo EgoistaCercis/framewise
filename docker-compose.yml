@@ -3,7 +3,7 @@ services:
     build: .
     container_name: framewise
     ports:
-      - "8000:8000"
+      - "8123:8123"
     volumes:
       # 持久化数据目录（字幕、索引、对话记录不会因容器重启丢失）
       - ./data:/app/data

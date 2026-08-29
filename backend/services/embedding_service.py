@@ -3,7 +3,8 @@
 通过厂商标配层调用
 """
 from loguru import logger
-from backend.services.provider_service import call_embedding, get_provider
+from backend.services.gateway import embed
+from backend.services.provider_service import get_provider
 from backend.services.cost_service import log_usage
 from backend.config import SILICONFLOW_EMBEDDING_MODEL
 
@@ -15,7 +16,7 @@ async def embed_texts(texts: list[str], video_id: str = None) -> list[list[float
         return []
 
     provider, cfg = get_provider("embedding")
-    embeddings = await call_embedding(texts)
+    embeddings = await embed(texts)
 
     # 记录用量（估算）
     total_chars = sum(len(t) for t in texts)

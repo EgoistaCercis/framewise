@@ -9,17 +9,17 @@ from loguru import logger
 
 async def transcribe_via_url(audio_url: str, api_key: str) -> list[dict]:
     """DashScope Paraformer URL 直传"""
-    from backend.services.provider_service import call_asr_url
-    return await call_asr_url(audio_url)
+    from backend.services.gateway import asr_url
+    return await asr_url(audio_url)
 
 
 async def transcribe_via_upload(audio_path: str, api_key: str = None, base_url: str = None) -> list[dict]:
     """本地文件上传 ASR（通过厂商标配层）"""
-    from backend.services.provider_service import call_asr_upload
+    from backend.services.gateway import asr
 
     file_size = os.path.getsize(audio_path)
     logger.info(f"Uploading audio for ASR: {file_size / 1024 / 1024:.1f} MB")
-    subtitles = await call_asr_upload(audio_path)
+    subtitles = await asr(audio_path)
 
     from backend.services.provider_service import get_provider
     provider, cfg = get_provider("asr")

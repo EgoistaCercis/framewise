@@ -546,11 +546,11 @@ async def ask_stream(video_id: str, req: AskRequest):
               "end_time": r["chunk"]["end_time"], "score": r["score"]} for r in results]
 
     async def generate():
-        from backend.services.provider_service import call_chat_stream
+        from backend.services.gateway import chat_stream
         from backend.config import LLM_MAX_TOKENS
         full = ""
         try:
-            async for token in call_chat_stream(
+            async for token in chat_stream(
                 messages=[{"role": "user", "content": user_prompt}],
                 system_prompt=SYSTEM_PROMPT,
                 max_tokens=LLM_MAX_TOKENS,
@@ -724,11 +724,11 @@ async def ask_frame_stream(video_id: str, req: AskFrameRequest):
               "end_time": r["chunk"]["end_time"], "score": r["score"]} for r in results]
 
     async def generate():
-        from backend.services.provider_service import call_chat_stream
+        from backend.services.gateway import chat_stream
         from backend.config import LLM_MAX_TOKENS
         full = ""
         try:
-            async for token in call_chat_stream(
+            async for token in chat_stream(
                 messages=[{"role": "user", "content": user_prompt}],
                 system_prompt=SYSTEM_PROMPT,
                 max_tokens=LLM_MAX_TOKENS,

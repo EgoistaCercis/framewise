@@ -5,7 +5,7 @@
 (function () {
     "use strict";
 
-    var API_BASE = "http://127.0.0.1:8000";
+    var API_BASE = "http://127.0.0.1:8123";
     var host = location.hostname;
     if (!host.includes("bilibili.com") && !host.includes("youtube.com")) return;
 

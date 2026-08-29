@@ -243,7 +243,7 @@ async def get_recent_context(video_id: str) -> str:
 
 async def _llm_summarize(msgs: list[dict]) -> str:
     """用 LLM 生成对话摘要"""
-    from backend.services.provider_service import call_chat
+    from backend.services.gateway import chat
 
     text = "\n".join(
         f"{'用户' if m['role'] == 'user' else 'AI'}: {m['content'][:200]}"
@@ -254,7 +254,7 @@ async def _llm_summarize(msgs: list[dict]) -> str:
 
 {text}"""
 
-    answer, _ = await call_chat(
+    answer, _ = await chat(
         messages=[{"role": "user", "content": prompt}],
         system_prompt="你是对话摘要助手，只输出简洁的中文摘要。",
         max_tokens=300,
