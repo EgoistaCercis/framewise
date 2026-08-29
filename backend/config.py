@@ -32,6 +32,13 @@ LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-v4-pro")
 # 推理模型需要更大 max_tokens（reasoning + 回答）
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))
 
+# Smart Chat（前端可切换的高阶模型，厂家/endpoint/key/model 均独立于 default）
+# 前端「智能」按钮开启 chat 时使用；未配置 SMART_LLM_API_KEY 时自动回落 default
+SMART_LLM_PROVIDER = os.getenv("SMART_LLM_PROVIDER", LLM_PROVIDER)
+SMART_LLM_ENDPOINT = os.getenv("SMART_LLM_ENDPOINT", LLM_ENDPOINT)
+SMART_LLM_API_KEY = os.getenv("SMART_LLM_API_KEY", "")
+SMART_LLM_MODEL = os.getenv("SMART_LLM_MODEL", "deepseek-v4-pro")
+
 # Embedding
 EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "siliconflow")
 EMBEDDING_ENDPOINT = os.getenv("EMBEDDING_ENDPOINT", "https://api.siliconflow.cn/v1/embeddings")

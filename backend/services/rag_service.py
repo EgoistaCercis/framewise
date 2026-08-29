@@ -35,6 +35,7 @@ async def answer_text_question(
     question: str,
     top_k: int = None,
     video_id: str = None,
+    smart: bool = False,
 ) -> dict:
     """
     文本问答：检索 + LLM生成
@@ -72,7 +73,7 @@ async def answer_text_question(
 
 请根据以上字幕内容和对话上下文回答用户问题。"""
 
-    answer = await _call_deepseek(user_prompt, video_id=video_id)
+    answer = await _call_deepseek(user_prompt, video_id=video_id, smart=smart)
 
     # Step 6: 构建引用
     references = []
@@ -97,6 +98,7 @@ async def answer_with_frame_context(
     frame_description: str,
     top_k: int = None,
     video_id: str = None,
+    smart: bool = False,
 ) -> dict:
     """
     结合画面描述的问答
@@ -133,7 +135,7 @@ async def answer_with_frame_context(
 
 请结合以上字幕内容、画面信息和对话上下文，综合回答用户问题。"""
 
-    answer = await _call_deepseek(user_prompt, video_id=video_id)
+    answer = await _call_deepseek(user_prompt, video_id=video_id, smart=smart)
 
     references = []
     for r in results:
@@ -179,6 +181,7 @@ async def generate_quiz(
     video_hash: str,
     timestamp: float,
     video_id: str = None,
+    smart: bool = False,
 ) -> dict:
     """
     主动学习：根据当前视频片段生成考题
@@ -215,7 +218,7 @@ async def generate_quiz(
 
 用户暂停在 {_format_time(timestamp)} 处，请根据以上内容出题考察用户。"""
 
-    answer = await _call_deepseek(user_prompt, video_id=video_id, system_prompt=QUIZ_PROMPT)
+    answer = await _call_deepseek(user_prompt, video_id=video_id, system_prompt=QUIZ_PROMPT, smart=smart)
 
     # 解析问题和答案
     questions = _parse_quiz(answer)
@@ -387,22 +390,33 @@ async def _get_conversation_context(video_id: str) -> str:
         return ""
 
 
-async def _call_deepseek(user_prompt: str, video_id: str = None, system_prompt: str = None) -> str:
-    """调用 LLM（通过厂商标配层），并记录 token 用量"""
+async def _call_deepseek(user_prompt: str, video_id: str = None,
+                         system_prompt: str = None, smart: bool = False) -> str:
+    """调用 LLM（通过网关层），并记录 token 用量。
+
+    smart=True 时使用独立的高阶模型（config.SMART_LLM_*，厂家可不同）。
+    """
     from backend.services.cost_service import log_usage
     from backend.services.gateway import chat
     from backend.services.provider_service import get_provider
+    from backend import config
 
     from backend.config import LLM_MAX_TOKENS
-    provider, cfg = get_provider("chat")
+    if smart and config.SMART_LLM_API_KEY:
+        model = config.SMART_LLM_MODEL
+        provider = config.SMART_LLM_PROVIDER
+    else:
+        provider, cfg = get_provider("chat")
+        model = cfg["model"]
     answer, usage = await chat(
         messages=[{"role": "user", "content": user_prompt}],
         system_prompt=system_prompt or SYSTEM_PROMPT,
         max_tokens=LLM_MAX_TOKENS,
+        smart=smart,
     )
 
     log_usage(
-        model=cfg["model"],
+        model=model,
         provider=provider,
         call_type="chat",
         input_tokens=usage.get("prompt_tokens", 0),

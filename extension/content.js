@@ -6,6 +6,7 @@
     "use strict";
 
     var API_BASE = "http://127.0.0.1:8123";
+    var smartMode = false;  // 「智能模型」开关：使用高阶模型
     var host = location.hostname;
     if (!host.includes("bilibili.com") && !host.includes("youtube.com")) return;
 
@@ -61,6 +62,7 @@
         '<button id="fw-auto" title="自动处理" style="background:#2a2a55;border:1px solid #6c5ce7;color:#e0e0f0;font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:3px;">🤖</button>' +
         '<button id="fw-proc" title="手动处理" style="background:none;border:1px solid rgba(255,255,255,0.15);color:#999;font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:3px;">🔄</button>' +
         '<button id="fw-quiz" title="考考我" style="background:none;border:1px solid rgba(255,255,255,0.15);color:#999;font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:3px;">❓</button>' +
+        '<button id="fw-smart" title="智能模型" style="background:none;border:1px solid rgba(255,255,255,0.15);color:#999;font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:3px;">🧠</button>' +
         '<button id="fw-min" title="缩小" style="background:none;border:none;color:#999;font-size:18px;cursor:pointer;padding:2px 6px;line-height:1;">−</button>' +
         '<button id="fw-cls" title="关闭" style="background:none;border:none;color:#999;font-size:14px;cursor:pointer;">✕</button>' +
         '</div>' +
@@ -102,6 +104,32 @@
     document.getElementById("fw-quiz").onclick = function () { if (!window._fwReady) { addMsg("system", "⏳ 等待就绪"); return; } addMsg("system", "🤔 出题中..."); fetch(API_BASE + "/api/videos/" + videoId + "/quiz", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ timestamp: getCurrentTime() }) }).then(function (r) { return r.json(); }).then(function (data) { var h = '<b>📝 小测验 (' + data.context_time + ')：</b><br><br>'; data.questions.forEach(function (q, i) { h += '<div style="margin-bottom:8px;"><b>' + (i + 1) + '. ' + esc(q.question) + '</b>'; h += '<div style="margin-top:3px;cursor:pointer;color:#00d2a0;font-size:11px;" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==\'block\'?\'none\':\'block\'">💡 查看答案</div>'; h += '<div style="display:none;background:#1a1a2e;padding:6px 10px;border-radius:4px;margin-top:3px;font-size:12px;border-left:3px solid #00d2a0;">' + esc(q.answer) + '</div></div>'; }); addMsg("assistant", h); }).catch(function (e) { addMsg("error", e.message || "请求失败"); }); };
     document.getElementById("fw-hist").onclick = function () { fetch(API_BASE + "/api/conversations").then(function (r) { return r.json(); }).then(function (data) { var c = document.getElementById("fw-msgs"); c.innerHTML = ""; if (!data.length) { addMsg("system", "暂无历史"); return; } var h = '<div style="font-size:13px;font-weight:600;padding:0 0 8px;border-bottom:1px solid rgba(255,255,255,0.1);margin-bottom:8px;">📋 历史对话</div>'; data.forEach(function (cv) { h += '<div data-vid="' + esc(cv.video_id) + '" style="padding:8px 10px;border-radius:6px;background:rgba(255,255,255,0.05);cursor:pointer;margin-bottom:4px;"><div style="font-size:12px;">' + esc(cv.title) + '</div><div style="font-size:10px;color:#999;">' + cv.msg_count + '条 · ' + (cv.last_time || '').slice(0, 10) + '</div></div>'; }); c.innerHTML = h; c.querySelectorAll("[data-vid]").forEach(function (el) { el.onclick = function () { window._fwReady = false; videoId = this.dataset.vid; fetch(API_BASE + "/api/videos/" + videoId).then(function (r) { return r.json(); }).then(function (info) { if (info.status === "ready") { window._fwReady = true; updateStatus("✅ 就绪"); document.getElementById("fw-input").disabled = false; document.getElementById("fw-send").disabled = false; loadHistory(); } else { updateStatus("⏳ 重新处理..."); initVideo(); } }); }; }); }).catch(function () { addMsg("error", "加载失败"); }); };
     document.getElementById("fw-send").onclick = sendQuestion;
+    var smartBtn = document.getElementById("fw-smart");
+    var smartConfigured = null;  // null=未知，true/false=后端告知
+    function syncSmartBtn() {
+        smartBtn.style.background = smartMode ? "#00d2a0" : "none";
+        smartBtn.style.color = smartMode ? "#000" : "#999";
+        smartBtn.title = smartMode ? "智能模型：已开启" : "智能模型：已关闭";
+    }
+    smartBtn.onclick = function () {
+        function apply() {
+            if (!smartConfigured) {
+                addMsg("error", "⚠️ 智能模型未配置（请去 .env 配置 SMART_LLM_API_KEY），本次仍使用默认模型");
+                return;
+            }
+            smartMode = !smartMode;
+            syncSmartBtn();
+            addMsg("system", smartMode ? "🧠 已切换到智能模型" : "📝 已切回默认模型");
+        }
+        if (smartConfigured === null) {
+            fetch(API_BASE + "/api/llm_config").then(function (r) { return r.json(); })
+                .then(function (d) { smartConfigured = !!d.smart_configured; apply(); })
+                .catch(function () { addMsg("error", "⚠️ 无法获取智能模型配置，请确认服务已启动"); });
+        } else {
+            apply();
+        }
+    };
+    syncSmartBtn();
     var inp = document.getElementById("fw-input");
     inp.onkeydown = function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendQuestion(); } };
     inp.oninput = function () { inp.style.height = "auto"; inp.style.height = Math.min(inp.scrollHeight, 80) + "px"; };
@@ -217,7 +245,7 @@
         function finish() { inp.disabled = false; document.getElementById("fw-send").disabled = false; inp.focus(); isProcessing = false; }
 
         // 画面模式：走流式 ask_frame_stream（先分析画面，再流式回答）
-        var body2 = { question: q, timestamp: t };
+        var body2 = { question: q, timestamp: t, smart: smartMode };
         if (isVision) {
             var frame = captureFrame();
             if (frame) body2.frame_base64 = frame;
