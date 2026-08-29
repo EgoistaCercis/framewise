@@ -128,12 +128,14 @@ _load_states()
 class AskRequest(BaseModel):
     question: str
     timestamp: float | None = None  # 可选：当前播放时间戳
+    smart: bool = False  # 前端「智能」按钮：使用高阶模型
 
 
 class AskFrameRequest(BaseModel):
     question: str
     timestamp: float  # 当前暂停时间戳
     frame_base64: str | None = None  # 浏览器端截图的base64（优先使用）
+    smart: bool = False  # 前端「智能」按钮：使用高阶模型
 
 
 # ═══════════════════════════════════════════
@@ -143,6 +145,20 @@ class AskFrameRequest(BaseModel):
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "version": "0.1.0"}
+
+
+@app.get("/api/llm_config")
+async def llm_config():
+    """返回 LLM 配置信息（不含密钥），供前端判断「智能模型」是否已配置"""
+    from backend import config as _c
+    smart_configured = bool(_c.SMART_LLM_API_KEY)
+    return {
+        "default_provider": _c.LLM_PROVIDER,
+        "default_model": _c.LLM_MODEL,
+        "smart_configured": smart_configured,
+        "smart_provider": _c.SMART_LLM_PROVIDER if smart_configured else None,
+        "smart_model": _c.SMART_LLM_MODEL if smart_configured else None,
+    }
 
 
 @app.get("/api/memory")
@@ -271,11 +287,13 @@ async def generate_quiz_endpoint(video_id: str, req: dict):
         raise HTTPException(400, "视频尚未处理完成")
 
     timestamp = req.get("timestamp", 0)
-    logger.info(f"[{video_id}] 智能出题 @ {timestamp:.0f}s")
+    smart = req.get("smart", False)
+    logger.info(f"[{video_id}] 智能出题 @ {timestamp:.0f}s (smart={smart})")
     result = await generate_quiz(
         video_hash=state["video_hash"],
         timestamp=timestamp,
         video_id=video_id,
+        smart=smart,
     )
     return result
 
@@ -490,6 +508,7 @@ async def ask_question(video_id: str, req: AskRequest):
             video_hash=state["video_hash"],
             question=req.question,
             video_id=video_id,
+            smart=req.smart,
         )
     except FileNotFoundError:
         state["status"] = "error"
@@ -554,6 +573,7 @@ async def ask_stream(video_id: str, req: AskRequest):
                 messages=[{"role": "user", "content": user_prompt}],
                 system_prompt=SYSTEM_PROMPT,
                 max_tokens=LLM_MAX_TOKENS,
+                smart=req.smart,
             ):
                 full += token
                 yield f"data: {json.dumps({'token': token})}\n\n".encode()
@@ -648,6 +668,7 @@ async def ask_with_frame(video_id: str, req: AskFrameRequest):
             question=req.question,
             frame_description=frame_result["description"],
             video_id=video_id,
+            smart=req.smart,
         )
     except RuntimeError as e:
         raise HTTPException(503, detail=str(e))
@@ -732,6 +753,7 @@ async def ask_frame_stream(video_id: str, req: AskFrameRequest):
                 messages=[{"role": "user", "content": user_prompt}],
                 system_prompt=SYSTEM_PROMPT,
                 max_tokens=LLM_MAX_TOKENS,
+                smart=req.smart,
             ):
                 full += token
                 yield f"data: {json.dumps({'token': token})}\n\n".encode()

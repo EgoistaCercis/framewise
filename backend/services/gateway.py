@@ -17,6 +17,7 @@
     subtitles = await asr(audio_path)
 """
 import asyncio
+import random
 
 from openai import (
     AsyncOpenAI,
@@ -72,6 +73,23 @@ def _service_cfg(service: str) -> dict:
     raise ValueError(f"未支持的服务类型: {service}")
 
 
+def _chat_cfg(smart: bool = False) -> dict:
+    """返回 chat 配置；smart=True 时使用独立的高阶模型（厂家可不同）"""
+    if smart and config.SMART_LLM_API_KEY:
+        return {
+            "provider": config.SMART_LLM_PROVIDER,
+            "base_url": _endpoint_to_base(config.SMART_LLM_ENDPOINT, "/chat/completions"),
+            "api_key": config.SMART_LLM_API_KEY,
+            "model": config.SMART_LLM_MODEL,
+        }
+    return {
+        "provider": config.LLM_PROVIDER,
+        "base_url": _endpoint_to_base(config.LLM_ENDPOINT, "/chat/completions"),
+        "api_key": config.LLM_API_KEY,
+        "model": config.LLM_MODEL,
+    }
+
+
 # ── 客户端缓存（按 base_url 复用连接池）───────────────────
 _clients: dict[str, AsyncOpenAI] = {}
 _client_lock = asyncio.Lock()
@@ -91,6 +109,36 @@ async def _client(cfg: dict) -> AsyncOpenAI:
                     timeout=120.0,
                 )
     return _clients[base]
+
+
+# ── 统一重试策略 ──────────────────────────────────────────
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+RETRYABLE_EXC = (APIConnectionError, APITimeoutError, RateLimitError)
+MAX_RETRIES = 3
+BASE_DELAY = 0.6
+
+
+async def _with_retry(fn, *, retries: int = MAX_RETRIES, desc: str = ""):
+    """对可重试错误做指数退避重试：
+    - 重试：网络错误(APITimeoutError/APIConnectionError)、429、5xx(500/502/503/504)
+    - 不重试：400/401/404 等客户端错误（重试无意义）
+    重试耗尽后抛出最后一个异常。
+    """
+    last = None
+    for attempt in range(retries + 1):
+        try:
+            return await fn()
+        except RETRYABLE_EXC as e:
+            last = e
+            if attempt >= retries:
+                break
+            await asyncio.sleep(BASE_DELAY * (2 ** attempt) + random.uniform(0, 0.3))
+        except APIError as e:
+            if e.status_code not in RETRYABLE_STATUS or attempt >= retries:
+                raise
+            last = e
+            await asyncio.sleep(BASE_DELAY * (2 ** attempt))
+    raise last
 
 
 # ── usage 归一化：SDK 对象 → 兼容 dict ─────────────────────
@@ -137,11 +185,14 @@ def translate_error(e: Exception, provider: str = "") -> str:
 # ═══════════════════════════════════════════════════════
 async def chat(messages: list[dict], system_prompt: str = None,
                temperature: float = 0.7, max_tokens: int = None,
-               provider: str = None) -> tuple[str, dict]:
-    """调用 LLM 对话，返回 (回答文本, usage信息)"""
+               smart: bool = False) -> tuple[str, dict]:
+    """调用 LLM 对话，返回 (回答文本, usage信息)
+
+    smart=True 时使用独立的高阶模型（config.SMART_LLM_*，厂家可不同）。
+    """
     if max_tokens is None:
         max_tokens = config.LLM_MAX_TOKENS
-    cfg = _service_cfg("chat")
+    cfg = _chat_cfg(smart)
     client = await _client(cfg)
 
     msgs = []
@@ -150,11 +201,14 @@ async def chat(messages: list[dict], system_prompt: str = None,
     msgs.extend(messages)
 
     try:
-        resp = await client.chat.completions.create(
-            model=cfg["model"],
-            messages=msgs,
-            temperature=temperature,
-            max_tokens=max_tokens,
+        resp = await _with_retry(
+            lambda: client.chat.completions.create(
+                model=cfg["model"],
+                messages=msgs,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            ),
+            desc="chat",
         )
         answer = resp.choices[0].message.content or ""
         return answer, _usage_to_dict(resp.usage)
@@ -164,11 +218,15 @@ async def chat(messages: list[dict], system_prompt: str = None,
 
 async def chat_stream(messages: list[dict], system_prompt: str = None,
                       temperature: float = 0.7, max_tokens: int = None,
-                      provider: str = None):
-    """流式 LLM 对话，异步 yield 每个 token 文本"""
+                      smart: bool = False):
+    """流式 LLM 对话，异步 yield 每个 token 文本
+
+    smart=True 时使用独立的高阶模型。
+    重试仅在建立连接阶段进行；一旦开始产出 token 就不再重发，避免重复。
+    """
     if max_tokens is None:
         max_tokens = config.LLM_MAX_TOKENS
-    cfg = _service_cfg("chat")
+    cfg = _chat_cfg(smart)
     client = await _client(cfg)
 
     msgs = []
@@ -177,12 +235,15 @@ async def chat_stream(messages: list[dict], system_prompt: str = None,
     msgs.extend(messages)
 
     try:
-        stream = await client.chat.completions.create(
-            model=cfg["model"],
-            messages=msgs,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            stream=True,
+        stream = await _with_retry(
+            lambda: client.chat.completions.create(
+                model=cfg["model"],
+                messages=msgs,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=True,
+            ),
+            desc="chat_stream",
         )
         async for chunk in stream:
             if not chunk.choices:
@@ -209,7 +270,10 @@ async def embed(texts: list[str], provider: str = None) -> list[list[float]]:
     try:
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
-            resp = await client.embeddings.create(model=cfg["model"], input=batch)
+            resp = await _with_retry(
+                lambda: client.embeddings.create(model=cfg["model"], input=batch),
+                desc="embedding",
+            )
             batch_results = sorted(resp.data, key=lambda x: x.index)
             all_embeddings.extend([item.embedding for item in batch_results])
         return all_embeddings
@@ -231,10 +295,13 @@ async def vision(image_base64: str, prompt: str = None,
         {"type": "text", "text": prompt or "请详细描述这张图片/视频帧中的内容。"},
     ]
     try:
-        resp = await client.chat.completions.create(
-            model=cfg["model"],
-            messages=[{"role": "user", "content": content}],
-            max_tokens=500,
+        resp = await _with_retry(
+            lambda: client.chat.completions.create(
+                model=cfg["model"],
+                messages=[{"role": "user", "content": content}],
+                max_tokens=500,
+            ),
+            desc="vision",
         )
         answer = resp.choices[0].message.content or ""
         return answer, _vision_usage(resp.usage)
@@ -248,7 +315,6 @@ async def vision(image_base64: str, prompt: str = None,
 async def asr(audio_path: str, provider: str = None) -> list[dict]:
     """上传本地音频做语音转写，返回 [{text, start, end}, ...]"""
     import os
-    from http import HTTPStatus  # noqa: F401 (未直接用，保留模板)
 
     cfg = _service_cfg("asr")
     client = await _client(cfg)
@@ -257,26 +323,20 @@ async def asr(audio_path: str, provider: str = None) -> list[dict]:
     filename = os.path.basename(audio_path)
     mime = mime_map.get(os.path.splitext(filename)[1].lower(), "audio/wav")
 
-    last_error = None
     with open(audio_path, "rb") as f:
         files = (filename, f, mime)
-        for attempt in range(3):
-            try:
-                resp = await client.audio.transcriptions.create(
+        try:
+            resp = await _with_retry(
+                lambda: client.audio.transcriptions.create(
                     model=cfg["model"],
                     file=files,
                     response_format="verbose_json",
                     timestamp_granularities=["segment"],
-                )
-                break
-            except Exception as e:
-                last_error = e
-                if isinstance(e, APIError) and e.status_code and e.status_code >= 500:
-                    await asyncio.sleep((attempt + 1) * 5)
-                else:
-                    raise RuntimeError(translate_error(e, cfg["provider"])) from e
-        else:
-            raise RuntimeError(translate_error(last_error, cfg["provider"])) from last_error
+                ),
+                desc="asr",
+            )
+        except Exception as e:
+            raise RuntimeError(translate_error(e, cfg["provider"])) from e
 
     return _parse_subtitles(resp)
 
