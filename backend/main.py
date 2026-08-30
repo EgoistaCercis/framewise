@@ -298,6 +298,22 @@ async def generate_quiz_endpoint(video_id: str, req: dict):
     return result
 
 
+@app.post("/api/videos/{video_id}/note")
+async def generate_note(video_id: str, req: dict = None):
+    """生成学习笔记（预留接口，未来由 Agent 通过对话生成并落盘）。
+
+    保存路径可在前端设置界面配置，或由 req.get('path') 指定。
+    当前为占位，后续接入笔记生成 Agent。
+    """
+    path = (req or {}).get("path")
+    return {
+        "status": "not_implemented",
+        "message": "笔记功能开发中，未来由 Agent 对话生成",
+        "video_id": video_id,
+        "path": path,
+    }
+
+
 @app.get("/api/videos/{video_id}/history")
 async def get_chat_history(video_id: str, limit: int = 50):
     """获取视频的聊天记录"""
