@@ -151,7 +151,9 @@ async def health():
 async def llm_config():
     """返回 LLM 配置信息（不含密钥），供前端判断「智能模型」是否已配置"""
     from backend import config as _c
-    smart_configured = bool(_c.SMART_LLM_API_KEY)
+    _smart_key = (_c.SMART_LLM_API_KEY or "").strip()
+    # 空值或占位符 your_key_here 均视为未配置
+    smart_configured = bool(_smart_key) and _smart_key != "your_key_here"
     return {
         "default_provider": _c.LLM_PROVIDER,
         "default_model": _c.LLM_MODEL,

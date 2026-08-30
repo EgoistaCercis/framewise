@@ -48,4 +48,6 @@ evaluation/
 
 # codex本地配置
 .codex/
-docs/
+# 架构图等文档快照不提交，但保留 images 目录里的图片
+docs/*
+!docs/images/
