@@ -71,7 +71,7 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 8123
 
 ## 使用样例
 
-![示例](docs/images/example.png)
+![示例](docs/images/new_ui_20260831.png)
 
 ## 🏗️ 架构
 
