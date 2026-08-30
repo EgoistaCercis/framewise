@@ -4,7 +4,6 @@
 
 ## ✨ 特性
 
-- 🎙️ **语音转文字** — API 秒级处理，支持中英文
 - 📝 **内容问答** — 带时间戳引用，点击跳转视频
 - 🖼️ **画面分析** — 暂停时自动截图 + 视觉理解
 - ❓ **主动学习** — AI 出题考察理解程度
@@ -77,41 +76,61 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 8123
 ## 🏗️ 架构
 
 ```
-用户 → Web前端 / Chrome插件
+用户 → Chrome 插件 / Web 前端
+         ↓ FastAPI 网关层（backend.main：CORS + Loguru + 视频状态管理）
          ↓
-    FastAPI 网关层（CORS + Loguru）
-         ↓
-  ┌──────┼──────┐
-  ↓      ↓      ↓
-视频处理  ASR    RAG 检索
-(yt-dlp) (API)  (FAISS)
-                  ↓
-        多模态 LLM（DeepSeek / Qwen VL）
-                  ↓
-           回答 + 时间戳
+ ┌───────┼──────────┬──────────────┐
+ ↓       ↓          ↓
+视频摄取   ASR      RAG 检索
+(url_*) (asr_*)  (vector_store / embedding)
+ └───────┴──────────┴───────┬─────┘
+                            ↓
+       模型网关 gateway.py（统一 OpenAI 协议）
+        chat / embed / vision / asr（含重试 + default/smart 路由）
+                            ↓
+     多模态 LLM（DeepSeek / Qwen VL / BGE-M3 / SenseVoice）
+                            ↑
+         pricing_service 定价 · cost_service 用量统计
 ```
 
 ## 📁 项目结构
 
 ```
 framewise/
-├── backend/                  # FastAPI 后端
-│   ├── main.py               # API 路由
-│   ├── config.py             # 配置管理（.env 驱动）
-│   └── services/             # 核心服务
-│       ├── provider_service  # API 厂商标配层
-│       ├── rag_service       # RAG 问答
-│       ├── vision_service    # 画面分析
-│       ├── asr_service       # 语音识别
-│       └── ...
-├── extension/                # Chrome 插件
-│   ├── content.js            # B站/YouTube 注入
+├── backend/                    # FastAPI 后端
+│   ├── main.py                 # API 路由 + 应用入口
+│   ├── config.py               # 配置管理（.env 驱动）
+│   ├── prompts.py              # 统一提示词管理（预留 memory/skill 注入）
+│   └── services/
+│       ├── llm/                # 模型网关 / 厂商 / 定价 / 用量
+│       │   ├── gateway         # OpenAI 统一网关（chat/embed/vision/asr，重试 + smart 路由）
+│       │   ├── provider_service# 厂商标配查询
+│       │   ├── pricing_service # 模型定价（带版本历史）
+│       │   └── cost_service    # token 用量与费用统计
+│       ├── media/              # 多媒体摄取与理解
+│       │   ├── url_service     # 视频/字幕获取
+│       │   ├── asr_service     # 语音识别（本地 whisper）
+│       │   ├── asr_api_service # 语音识别（API）
+│       │   ├── vision_service  # 画面分析
+│       │   └── cache_service   # 文件缓存
+│       ├── rag_pipeline/       # RAG 学习问答链路
+│       │   ├── rag_service     # RAG 问答
+│       │   ├── conversation_service # 多轮对话 + 上下文压缩
+│       │   ├── embedding_service    # 向量化
+│       │   ├── vector_store    # FAISS 检索
+│       │   └── chunk_service   # 字幕切分
+│       └── memory/             # 长期记忆（为 memory 系统预留）
+│           └── memory_service
+├── extension/                  # Chrome 插件
+│   ├── content.js              # B站/YouTube 注入
 │   └── manifest.json
-├── frontend/                 # Web 前端
+├── frontend/                   # Web 前端
 │   └── static/
+├── scripts/  evaluation/  docs/  data/
 ├── Dockerfile
 ├── docker-compose.yml
-└── requirements.txt
+├── requirements.txt
+└── .env.example
 ```
 
 ## 📄 协议
