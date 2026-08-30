@@ -59,10 +59,8 @@
         '<span style="font-weight:700;pointer-events:none;">🎬 帧知</span>' +
         '<span id="fw-status" style="flex:1;margin-left:8px;font-size:11px;color:#999;pointer-events:none;"></span>' +
         '<button id="fw-hist" title="历史" style="background:none;border:1px solid rgba(255,255,255,0.15);color:#999;font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:3px;">📋</button>' +
-        '<button id="fw-auto" title="自动处理" style="background:#2a2a55;border:1px solid #6c5ce7;color:#e0e0f0;font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:3px;">🤖</button>' +
-        '<button id="fw-proc" title="手动处理" style="background:none;border:1px solid rgba(255,255,255,0.15);color:#999;font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:3px;">🔄</button>' +
         '<button id="fw-quiz" title="考考我" style="background:none;border:1px solid rgba(255,255,255,0.15);color:#999;font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:3px;">❓</button>' +
-        '<button id="fw-smart" title="智能模型" style="background:none;border:1px solid rgba(255,255,255,0.15);color:#999;font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:3px;">🧠</button>' +
+        '<button id="fw-settings-btn" title="设置" style="background:none;border:1px solid rgba(255,255,255,0.15);color:#999;font-size:12px;cursor:pointer;padding:2px 6px;border-radius:4px;margin-right:3px;">⚙️</button>' +
         '<button id="fw-min" title="缩小" style="background:none;border:none;color:#999;font-size:18px;cursor:pointer;padding:2px 6px;line-height:1;">−</button>' +
         '<button id="fw-cls" title="关闭" style="background:none;border:none;color:#999;font-size:14px;cursor:pointer;">✕</button>' +
         '</div>' +
@@ -96,29 +94,82 @@
     // ── 事件绑定 ──
     document.getElementById("fw-cls").onclick = hideMini;
     document.getElementById("fw-min").onclick = hideMini;
-    var autoBtn = document.getElementById("fw-auto");
-    function updateAutoBtn(state) { autoMode = state; autoBtn.style.background = state ? "#2a2a55" : "rgba(255,255,255,0.06)"; autoBtn.style.borderColor = state ? "#6c5ce7" : "rgba(255,255,255,0.15)"; autoBtn.style.color = state ? "#e0e0f0" : "#999"; }
-    updateAutoBtn(autoMode);
-    autoBtn.onclick = function () { updateAutoBtn(!autoMode); localStorage.setItem("fw_auto", autoMode); };
-    document.getElementById("fw-proc").onclick = function () { videoId = null; window._fwReady = false; updateStatus("⏳ 手动处理..."); document.getElementById("fw-input").disabled = true; document.getElementById("fw-send").disabled = true; document.getElementById("fw-msgs").innerHTML = ""; lastUrl = cleanUrl(location.href); initVideo(true); };
     document.getElementById("fw-quiz").onclick = function () { if (!window._fwReady) { addMsg("system", "⏳ 等待就绪"); return; } addMsg("system", "🤔 出题中..."); fetch(API_BASE + "/api/videos/" + videoId + "/quiz", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ timestamp: getCurrentTime() }) }).then(function (r) { return r.json(); }).then(function (data) { var h = '<b>📝 小测验 (' + data.context_time + ')：</b><br><br>'; data.questions.forEach(function (q, i) { h += '<div style="margin-bottom:8px;"><b>' + (i + 1) + '. ' + esc(q.question) + '</b>'; h += '<div style="margin-top:3px;cursor:pointer;color:#00d2a0;font-size:11px;" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==\'block\'?\'none\':\'block\'">💡 查看答案</div>'; h += '<div style="display:none;background:#1a1a2e;padding:6px 10px;border-radius:4px;margin-top:3px;font-size:12px;border-left:3px solid #00d2a0;">' + esc(q.answer) + '</div></div>'; }); addMsg("assistant", h); }).catch(function (e) { addMsg("error", e.message || "请求失败"); }); };
     document.getElementById("fw-hist").onclick = function () { fetch(API_BASE + "/api/conversations").then(function (r) { return r.json(); }).then(function (data) { var c = document.getElementById("fw-msgs"); c.innerHTML = ""; if (!data.length) { addMsg("system", "暂无历史"); return; } var h = '<div style="font-size:13px;font-weight:600;padding:0 0 8px;border-bottom:1px solid rgba(255,255,255,0.1);margin-bottom:8px;">📋 历史对话</div>'; data.forEach(function (cv) { h += '<div data-vid="' + esc(cv.video_id) + '" style="padding:8px 10px;border-radius:6px;background:rgba(255,255,255,0.05);cursor:pointer;margin-bottom:4px;"><div style="font-size:12px;">' + esc(cv.title) + '</div><div style="font-size:10px;color:#999;">' + cv.msg_count + '条 · ' + (cv.last_time || '').slice(0, 10) + '</div></div>'; }); c.innerHTML = h; c.querySelectorAll("[data-vid]").forEach(function (el) { el.onclick = function () { window._fwReady = false; videoId = this.dataset.vid; fetch(API_BASE + "/api/videos/" + videoId).then(function (r) { return r.json(); }).then(function (info) { if (info.status === "ready") { window._fwReady = true; updateStatus("✅ 就绪"); document.getElementById("fw-input").disabled = false; document.getElementById("fw-send").disabled = false; loadHistory(); } else { updateStatus("⏳ 重新处理..."); initVideo(); } }); }; }); }).catch(function () { addMsg("error", "加载失败"); }); };
     document.getElementById("fw-send").onclick = sendQuestion;
-    var smartBtn = document.getElementById("fw-smart");
-    var smartConfigured = null;  // null=未知，true/false=后端告知
-    function syncSmartBtn() {
-        smartBtn.style.background = smartMode ? "#00d2a0" : "none";
-        smartBtn.style.color = smartMode ? "#000" : "#999";
-        smartBtn.title = smartMode ? "智能模型：已开启" : "智能模型：已关闭";
+    var smartConfigured = null;  // null=未知，true/false=后端告知（面板智能模型开关用）
+
+    // ── 独立可移动「设置」窗口 ──
+    var settingsBtn = document.getElementById("fw-settings-btn");
+    var setwin = document.createElement("div");
+    setwin.id = "fw-setwin";
+    setwin.style.cssText = "position:fixed;z-index:1000;background:#1c1a2e;border:1px solid rgba(255,255,255,0.15);border-radius:8px;box-shadow:0 14px 40px rgba(0,0,0,0.6);display:none;min-width:230px;font-size:12px;color:#e0e0f0;";
+    setwin.innerHTML =
+        '<div id="fw-set-head" style="display:flex;align-items:center;padding:8px 12px;border-bottom:1px solid rgba(255,255,255,0.1);cursor:move;user-select:none;">' +
+        '<span style="font-weight:600;">⚙️ 设置</span><span style="flex:1;"></span>' +
+        '<button id="fw-set-close" style="background:none;border:none;color:#999;cursor:pointer;font-size:14px;line-height:1;">✕</button></div>' +
+        '<div style="padding:6px;">' +
+        '<div class="fws-item" data-act="auto"  style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;color:#e0e0f0;cursor:pointer;border-radius:6px;">🤖 自动处理<span class="fws-state" data-for="auto" style="font-size:11px;color:#888;">关</span></div>' +
+        '<div class="fws-item" data-act="smart" style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;color:#e0e0f0;cursor:pointer;border-radius:6px;">🧠 智能模型<span class="fws-state" data-for="smart" style="font-size:11px;color:#888;">关</span></div>' +
+        '<div class="fws-item" data-act="proc"  style="padding:8px 10px;color:#e0e0f0;cursor:pointer;border-radius:6px;">🔄 手动处理</div>' +
+        '<div class="fws-item" data-act="copy"  style="padding:8px 10px;color:#e0e0f0;cursor:pointer;border-radius:6px;">📄 复制对话</div>' +
+        '<div class="fws-item" data-act="usage" style="padding:8px 10px;color:#e0e0f0;cursor:pointer;border-radius:6px;">📊 今日用量</div>' +
+        '<div class="fws-item" data-act="theme" style="padding:8px 10px;color:#e0e0f0;cursor:pointer;border-radius:6px;">🌗 主题切换</div>' +
+        '<div style="padding:8px 10px;border-top:1px solid rgba(255,255,255,0.08);margin-top:4px;">' +
+        '<div class="fws-label" style="margin-bottom:4px;color:#ccc;">📁 笔记保存目录<span id="fw-note-dir" style="float:right;color:#00d2a0;word-break:break-all;max-width:60%;text-align:right;">未选择</span></div>' +
+        '<button id="fw-note-pick" style="width:100%;padding:6px;background:#2a2a55;border:1px solid #6c5ce7;border-radius:6px;color:#e0e0f0;cursor:pointer;font-size:11px;">选择目录…</button>' +
+        '<input type="file" id="fw-note-dir-picker" webkitdirectory style="display:none;">' +
+        '<div class="fws-hint" style="margin-top:5px;font-size:10px;color:#777;">笔记由 Agent 通过对话生成，请选择保存目录</div></div>' +
+        '</div>';
+    setwin.style.left = (window.innerWidth - 270) + "px";
+    setwin.style.top = "110px";
+    document.body.appendChild(setwin);
+    var noteDir = document.getElementById("fw-note-dir");
+    var savedDir = localStorage.getItem("fw_note_dir");
+    if (savedDir) noteDir.textContent = savedDir;
+    function setNoteDir(dir) {
+        if (!dir) return;
+        localStorage.setItem("fw_note_dir", dir);
+        noteDir.textContent = dir;
+        addMsg("system", "📁 笔记保存目录已设置：" + dir);
     }
-    smartBtn.onclick = function () {
+    document.getElementById("fw-note-pick").onclick = function (ev) {
+        ev.stopPropagation();
+        if (window.showDirectoryPicker) {
+            window.showDirectoryPicker()
+                .then(function (h) { setNoteDir(h && h.name); })
+                .catch(function (e) { if (!e || e.name !== "AbortError") addMsg("error", "选择目录失败"); });
+        } else {
+            document.getElementById("fw-note-dir-picker").click();
+        }
+    };
+    document.getElementById("fw-note-dir-picker").onchange = function () {
+        var fl = this.files;
+        if (fl && fl.length) { setNoteDir(fl[0].webkitRelativePath.split("/")[0] || fl[0].name); }
+    };
+
+    function setAutoState() {
+        var s = setwin.querySelector('.fws-state[data-for="auto"]');
+        if (s) { s.textContent = autoMode ? "开" : "关"; s.style.color = autoMode ? "#00d2a0" : "#888"; }
+    }
+    function toggleAuto() {
+        autoMode = !autoMode;
+        localStorage.setItem("fw_auto", autoMode);
+        setAutoState();
+        addMsg("system", autoMode ? "🤖 自动处理：已开启" : "🤖 自动处理：已关闭");
+    }
+    function setSmartState() {
+        var s = setwin.querySelector('.fws-state[data-for="smart"]');
+        if (s) { s.textContent = smartMode ? "开" : "关"; s.style.color = smartMode ? "#00d2a0" : "#888"; }
+    }
+    function toggleSmart() {
         function apply() {
             if (!smartConfigured) {
                 addMsg("error", "⚠️ 智能模型未配置（请去 .env 配置 SMART_LLM_API_KEY），本次仍使用默认模型");
                 return;
             }
             smartMode = !smartMode;
-            syncSmartBtn();
+            setSmartState();
             addMsg("system", smartMode ? "🧠 已切换到智能模型" : "📝 已切回默认模型");
         }
         if (smartConfigured === null) {
@@ -128,8 +179,98 @@
         } else {
             apply();
         }
+    }
+    function doManualProcess() {
+        videoId = null; window._fwReady = false;
+        updateStatus("⏳ 手动处理...");
+        document.getElementById("fw-input").disabled = true;
+        document.getElementById("fw-send").disabled = true;
+        document.getElementById("fw-msgs").innerHTML = "";
+        lastUrl = cleanUrl(location.href);
+        initVideo(true);
+    }
+
+    // 主题样式（浅色背景 + 深色文字，提高可读性）
+    (function () {
+        var el = document.createElement("style"); el.id = "fw-theme-style";
+        el.textContent = ".fws-item:hover{background:rgba(255,255,255,0.08)}" +
+            ".fw-light{background:#f4f5fa !important;color:#1a1a2e !important}" +
+            ".fw-light .fws-item{color:#1a1a2e !important}" +
+            ".fw-light .fws-label{color:#1a1a2e !important}" +
+            ".fw-light .fws-hint{color:#666 !important}" +
+            ".fw-light #fw-status,.fw-light #fw-time,.fw-light #fw-mode-lbl{color:#444 !important}" +
+            ".fw-light #fw-msgs{color:#1a1a2e !important}" +
+            ".fw-light .fw-msg{background:#fff !important;color:#1a1a2e !important;border:1px solid #e5e5ea !important}" +
+            ".fw-light .fw-msg[data-role=user]{background:#eef0ff !important;color:#1a1a2e !important}" +
+            ".fw-light .fw-msg[data-role=assistant]{background:#fff !important;color:#1a1a2e !important}" +
+            ".fw-light .fw-msg[data-role=error]{color:#c0392b !important}" +
+            ".fw-light #fw-input{background:#fff !important;color:#1a1a2e !important;border:1px solid #ccc !important}" +
+            ".fw-light #fw-notepath{background:#fff !important;color:#1a1a2e !important;border-color:#ccc !important}";
+        document.head.appendChild(el);
+    })();
+    var isLight = false;
+    function toggleTheme() {
+        isLight = !isLight;
+        mini.classList.toggle("fw-light", isLight);
+        setwin.classList.toggle("fw-light", isLight);
+        addMsg("system", isLight ? "🌗 已切换浅色主题" : "🌙 已切回深色主题");
+    }
+
+    // 设置窗口开关 + 拖拽 + 项分发
+    settingsBtn.onclick = function (ev) {
+        ev.stopPropagation();
+        if (setwin.style.display === "block") { setwin.style.display = "none"; return; }
+        setAutoState(); setSmartState();
+        setwin.style.display = "block";
     };
-    syncSmartBtn();
+    document.getElementById("fw-set-close").onclick = function () { setwin.style.display = "none"; };
+
+    (function () {
+        var d = null, r = null;
+        document.getElementById("fw-set-head").addEventListener("mousedown", function (e) {
+            if (e.target.tagName === "BUTTON") return;
+            d = { sx: e.clientX, sy: e.clientY, x: setwin.offsetLeft, y: setwin.offsetTop };
+            e.preventDefault();
+        });
+        document.addEventListener("mousemove", function (e) {
+            if (!d || r) return;
+            r = requestAnimationFrame(function () { r = null;
+                setwin.style.left = (d.x + (e.clientX - d.sx)) + "px";
+                setwin.style.top = (d.y + (e.clientY - d.sy)) + "px";
+            });
+        });
+        document.addEventListener("mouseup", function () { d = null; });
+    })();
+
+    setwin.querySelectorAll(".fws-item").forEach(function (it) {
+        it.onclick = function (ev) {
+            ev.stopPropagation();
+            var act = it.getAttribute("data-act");
+            if (act === "auto") toggleAuto();
+            else if (act === "smart") toggleSmart();
+            else if (act === "proc") doManualProcess();
+            else if (act === "copy") {
+                var body = document.getElementById("fw-msgs").innerText;
+                if (!body.trim()) { addMsg("system", "暂无对话可复制"); return; }
+                addMsg("system", "📄 复制中…");
+                var done = function () { addMsg("system", "✅ 已复制当前对话"); };
+                var fail = function () { addMsg("error", "复制失败，请手动选择复制"); };
+                (navigator.clipboard ? navigator.clipboard.writeText("[帧知对话记录]\n" + body) : Promise.reject()).then(done).catch(fail);
+            } else if (act === "usage") {
+                fetch(API_BASE + "/api/usage/today").then(function (r) { return r.json(); })
+                    .then(function (d) { addMsg("system", "📊 今日用量：" + (d.calls || 0) + " 次 · " +
+                        (d.total_input_tokens || 0) + " in / " + (d.total_output_tokens || 0) + " out tokens · ¥" + (d.total_cost || 0)); })
+                    .catch(function () { addMsg("error", "获取用量失败"); });
+            } else if (act === "theme") toggleTheme();
+        };
+    });
+    // 点窗口外关闭
+    document.addEventListener("click", function (e) {
+        if (setwin.style.display === "block" && !setwin.contains(e.target) && e.target.id !== "fw-settings-btn") {
+            setwin.style.display = "none";
+        }
+    });
+
     var inp = document.getElementById("fw-input");
     inp.onkeydown = function (e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendQuestion(); } };
     inp.oninput = function () { inp.style.height = "auto"; inp.style.height = Math.min(inp.scrollHeight, 80) + "px"; };
@@ -200,7 +341,7 @@
         return t;
     }
     function fmt(s) { var m = Math.floor(s / 60), sec = Math.floor(s % 60); return String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0"); }
-    function addMsg(type, content) { var c = document.getElementById("fw-msgs"), div = document.createElement("div"); var colors = { system: "rgba(255,255,255,0.04);color:#999", user: "#6c5ce7;color:#fff;align-self:flex-end;max-width:85%", assistant: "rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);max-width:85%", error: "#e74c3c;color:#fff" }; div.style.cssText = (colors[type] || colors.system) + ";padding:8px 10px;border-radius:6px;margin-bottom:6px;font-size:12px;line-height:1.5;word-break:break-word;min-width:0;max-width:100%;"; div.innerHTML = content; c.appendChild(div); c.scrollTop = c.scrollHeight; return div; }
+    function addMsg(type, content) { var c = document.getElementById("fw-msgs"), div = document.createElement("div"); div.className = "fw-msg"; div.setAttribute("data-role", type); var colors = { system: "rgba(255,255,255,0.04);color:#999", user: "#6c5ce7;color:#fff;align-self:flex-end;max-width:85%", assistant: "rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.1);max-width:85%", error: "#e74c3c;color:#fff" }; div.style.cssText = (colors[type] || colors.system) + ";padding:8px 10px;border-radius:6px;margin-bottom:6px;font-size:12px;line-height:1.5;word-break:break-word;min-width:0;max-width:100%;"; div.innerHTML = content; c.appendChild(div); c.scrollTop = c.scrollHeight; return div; }
 
     // ── 定时任务 ──
     setInterval(function () { if (!window._fwReady) return; var t = getCurrentTime(); document.getElementById("fw-time").textContent = fmt(t); var paused = (document.querySelector("video") || {}).paused; var lbl = document.getElementById("fw-mode-lbl"); if (lbl) { lbl.textContent = paused ? "🖼️ 画面" : "📝 文本"; lbl.style.color = paused ? "#00d2a0" : "#999"; } }, 1000);
