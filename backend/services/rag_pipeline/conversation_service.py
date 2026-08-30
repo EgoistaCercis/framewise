@@ -11,6 +11,7 @@ from backend.config import (
     DATA_DIR, CONTEXT_MAX_MESSAGES, CONTEXT_MAX_TOKENS,
     TOOL_TRIM_LENGTH, SUMMARY_TARGET_LENGTH,
 )
+from backend.prompts import SUMMARY_PROMPT
 
 DB_PATH = os.path.join(DATA_DIR, "framewise.db")
 
@@ -256,7 +257,7 @@ async def _llm_summarize(msgs: list[dict]) -> str:
 
     answer, _ = await chat(
         messages=[{"role": "user", "content": prompt}],
-        system_prompt="你是对话摘要助手，只输出简洁的中文摘要。",
+        system_prompt=SUMMARY_PROMPT,
         max_tokens=300,
     )
     return answer.strip()

@@ -595,7 +595,8 @@ async def ask_stream(video_id: str, req: AskRequest):
     if state["status"] != "ready":
         raise HTTPException(400, f"视频尚未处理完成，当前状态: {state['status']}")
 
-    from backend.services.rag_pipeline.rag_service import prepare_rag_context, SYSTEM_PROMPT
+    from backend.services.rag_pipeline.rag_service import prepare_rag_context
+    from backend.prompts import SYSTEM_PROMPT
 
     try:
         user_prompt, results = await prepare_rag_context(
@@ -772,7 +773,8 @@ async def ask_frame_stream(video_id: str, req: AskFrameRequest):
     if state["status"] != "ready":
         raise HTTPException(400, f"视频尚未处理完成，当前状态: {state['status']}")
 
-    from backend.services.rag_pipeline.rag_service import prepare_frame_context, SYSTEM_PROMPT
+    from backend.services.rag_pipeline.rag_service import prepare_frame_context
+    from backend.prompts import SYSTEM_PROMPT
 
     # 先分析画面（非流式，耗时）
     try:
