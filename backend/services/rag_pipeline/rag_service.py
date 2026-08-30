@@ -9,18 +9,7 @@ from backend.config import (
 )
 from backend.services.rag_pipeline.embedding_service import embed_single
 from backend.services.rag_pipeline.vector_store import load_index, search
-
-SYSTEM_PROMPT = """你是视频学习助手"帧知"，帮助用户理解和学习视频内容。
-
-回答策略：
-1. 优先依据检索到的视频字幕内容回答
-2. 如果视频中有相关讲解，必须引用时间戳，格式：【MM:SS~MM:SS】（如【12:35~13:08】）
-3. 如果视频内容不足以回答用户问题，可以结合你的外部知识补充，但需要明确区分来源：
-   - 视频中提到的内容 → 标注时间戳
-   - 外部知识补充 → 注明"根据通用知识"
-4. 如果发现视频中的说法可能存在错误或过时，可以善意指出并提供更准确的信息
-5. 回答简洁清晰，适合学习场景
-6. 可以引用多个相关片段来组织完整答案"""
+from backend.prompts import SYSTEM_PROMPT, QUIZ_PROMPT, MEMORY_EXTRACT_PROMPT
 
 
 def _format_time(seconds: float) -> str:
@@ -152,29 +141,6 @@ async def answer_with_frame_context(
         "references": references,
         "frame_description": frame_description,
     }
-
-
-QUIZ_PROMPT = """你是视频学习助手"帧知"。用户暂停了视频，想检验自己是否理解了当前内容。
-
-请根据以下视频字幕片段，生成 2~3 个考题来考察用户的理解程度。
-
-严格按以下格式输出（不要任何前言、后语、解释）：
-
-Q1: （考察核心概念的题目）
-<answer>（标准答案）</answer>
-
-Q2: （考察理解深度的题目）
-<answer>（标准答案）</answer>
-
-Q3: （可选，考察应用能力的题目）
-<answer>（标准答案）</answer>
-
-要求：
-- 题目覆盖当前片段的核心知识点
-- 题型可以是概念解释、判断对错、填空、简答
-- 难度适中，能检验用户是否真正理解
-- 答案简洁准确
-- 不要输出任何格式之外的文字"""
 
 
 async def generate_quiz(
@@ -361,7 +327,7 @@ AI回答：{answer[:300]}"""
     try:
         result, _ = await chat(
             messages=[{"role": "user", "content": prompt}],
-            system_prompt="你是记忆提取助手，只输出用户偏好和学习主题，没有则输出'无'。",
+            system_prompt=MEMORY_EXTRACT_PROMPT,
             max_tokens=200,
         )
         text = result.strip()
