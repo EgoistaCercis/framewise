@@ -16,6 +16,7 @@ import uuid
 from loguru import logger
 
 from backend.prompts import AGENT_SYSTEM_PROMPT
+from backend.services.agent.compress_agent import CompressAgent
 from backend.services.agent.tools import get_tools_openai, get_tool
 from backend.services.llm import gateway
 
@@ -64,6 +65,7 @@ class Agent:
         self.max_iterations = max_iterations
         self.smart = smart
         self.tools_openai = get_tools_openai(tools)
+        self.compress_agent = CompressAgent(smart=smart)
 
     async def _build_messages(self, user_message: str, context: dict) -> list[dict]:
         """构造初始消息列表。长期记忆与历史对话作为独立消息（XML 标签）注入，
@@ -120,6 +122,7 @@ class Agent:
                            json.dumps({"name": tc["name"], "arguments": tc["arguments"]}, ensure_ascii=False),
                            tool_name=tc["name"])
                 result = await self._execute_tool(tc, context)
+                result = await self._compress_tool_result(user_message, tc["name"], result)
                 _log_trace(session_id, video_id, step, "tool_result", result, tool_name=tc["name"])
                 messages.append({
                     "role": "tool",
@@ -183,6 +186,7 @@ class Agent:
                            tool_name=tc["name"])
                 yield {"type": "tool", "name": tc["name"]}
                 result = await self._execute_tool(tc, context)
+                result = await self._compress_tool_result(user_message, tc["name"], result)
                 _log_trace(session_id, video_id, step, "tool_result", result, tool_name=tc["name"])
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
 
@@ -209,6 +213,10 @@ class Agent:
                 for tc in message["tool_calls"]
             ],
         }
+
+    async def _compress_tool_result(self, user_intent: str, tool_name: str, tool_result: str) -> str:
+        """结合用户意图压缩工具结果（上下文感知，短内容不压缩）"""
+        return await self.compress_agent.compress(user_intent, tool_name, tool_result)
 
     @staticmethod
     async def _execute_tool(tool_call: dict, context: dict) -> str:
