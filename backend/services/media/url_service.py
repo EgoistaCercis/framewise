@@ -279,6 +279,7 @@ def download_frame_at_time(url: str, timestamp: float, video_id: str) -> str:
         if stream_url:
             cmd = [
                 FFMPEG_PATH, "-y",
+                "-headers", "Referer: https://www.bilibili.com/\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
                 "-ss", str(timestamp),
                 "-i", stream_url,
                 "-vframes", "1",
@@ -303,16 +304,45 @@ def download_frame_at_time(url: str, timestamp: float, video_id: str) -> str:
 
 
 def _get_stream_url(url: str) -> str:
-    """用 yt-dlp 获取最佳视频流直链（不下载）"""
+    """用 yt-dlp 获取最佳视频流直链（不下载）。
+
+    B站视频为 DASH 多流，info["url"] 常为空，需从 formats 列表里选合适的视频流。
+    """
     import yt_dlp
     ydl_opts = {
-        "format": "best[height<=720]/best",
         "quiet": True,
         "no_warnings": True,
+        "force_ipv4": True,
+        "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://www.bilibili.com/",
+        },
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
-        return info.get("url", "")
+
+        # 优先：info["url"] 直接有值（单流视频）
+        if info.get("url"):
+            return info["url"]
+
+        # 从 formats 选视频流：有 vcodec、非 m3u8、有 height、有 url
+        formats = info.get("formats", []) or []
+        video_formats = [
+            f for f in formats
+            if f.get("vcodec") and f.get("vcodec") != "none"
+            and f.get("url")
+            and f.get("protocol") not in ("m3u8_native", "m3u8")
+        ]
+        if video_formats:
+            # 选最接近 720p 的
+            best = min(video_formats, key=lambda f: abs((f.get("height") or 720) - 720))
+            return best["url"]
+
+        # 兜底：任意有 url 的视频流
+        for f in formats:
+            if f.get("url") and f.get("vcodec") and f.get("vcodec") != "none":
+                return f["url"]
+        return ""
 
 
 def _download_frame_fallback(url: str, timestamp: float, output_path: str):

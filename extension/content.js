@@ -163,7 +163,7 @@
         '<span id="fw-time" style="margin-left:auto;font-size:11px;color:var(--fw-accent);font-family:monospace;">00:00</span>' +
         '</div>' +
         '<div style="display:flex;gap:6px;padding:8px 12px 12px;flex-shrink:0;">' +
-        '<textarea id="fw-input" placeholder="输入问题..." disabled rows="1" style="flex:1;padding:9px 11px;background:var(--fw-surface);border:1px solid var(--fw-border);border-radius:9px;color:var(--fw-text);font-size:12.5px;outline:none;resize:none;max-height:80px;line-height:1.4;font-family:inherit;transition:border-color .18s ease;}"></textarea>' +
+        '<textarea id="fw-input" placeholder="输入问题..." disabled rows="1" style="flex:1;padding:9px 11px;background:var(--fw-surface);border:1px solid var(--fw-border);border-radius:9px;color:var(--fw-text);font-size:12.5px;outline:none;resize:none;max-height:80px;line-height:1.4;font-family:inherit;overflow:hidden;transition:border-color .18s ease;"></textarea>' +
         '<button id="fw-send" disabled style="padding:0 14px;background:var(--fw-primary);border:none;border-radius:9px;color:#fff;font-weight:600;font-size:12.5px;cursor:pointer;white-space:nowrap;transition:background .18s ease,opacity .18s ease;">发送</button>' +
         '</div>' +
         '<div id="fw-rsz" style="position:absolute;right:0;bottom:0;width:14px;height:14px;cursor:se-resize;overflow:hidden;">' +
