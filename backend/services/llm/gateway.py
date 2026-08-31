@@ -309,6 +309,67 @@ async def chat_stream(messages: list[dict], system_prompt: str = None,
         raise RuntimeError(translate_error(e, cfg["provider"])) from e
 
 
+async def chat_with_tools_stream(messages: list[dict], system_prompt: str = None,
+                                 tools: list[dict] = None, temperature: float = 0.7,
+                                 max_tokens: int = None, smart: bool = False):
+    """流式 + tool calls 的 LLM 对话，yield 事件 dict。
+
+    事件：
+        {"type": "content", "delta": str}  文本增量
+        {"type": "done", "content": str, "tool_calls": [...]}  流结束汇总
+    """
+    if max_tokens is None:
+        max_tokens = config.LLM_MAX_TOKENS
+    cfg = _chat_cfg(smart)
+    client = await _client(cfg)
+
+    msgs = []
+    if system_prompt:
+        msgs.append({"role": "system", "content": system_prompt})
+    msgs.extend(messages)
+
+    try:
+        stream = await _with_retry(
+            lambda: client.chat.completions.create(
+                model=cfg["model"],
+                messages=msgs,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tools=tools or None,
+                stream=True,
+            ),
+            desc="chat_with_tools_stream",
+        )
+        content_parts = []
+        tool_calls = {}  # index -> {"id", "name", "arguments"}
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta is None:
+                continue
+            if delta.content:
+                content_parts.append(delta.content)
+                yield {"type": "content", "delta": delta.content}
+            if delta.tool_calls:
+                for tc in delta.tool_calls:
+                    entry = tool_calls.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
+                    if getattr(tc, "id", None):
+                        entry["id"] = tc.id
+                    if tc.function and tc.function.name:
+                        entry["name"] = tc.function.name
+                    if tc.function and tc.function.arguments:
+                        entry["arguments"] += tc.function.arguments
+
+        tc_list = [
+            {"id": e["id"], "name": e["name"], "arguments": e["arguments"]}
+            for _, e in sorted(tool_calls.items())
+        ]
+        yield {"type": "done", "content": "".join(content_parts), "tool_calls": tc_list}
+    except Exception as e:
+        raise RuntimeError(translate_error(e, cfg["provider"])) from e
+
+
 # ═══════════════════════════════════════════════════════
 # Embedding
 # ═══════════════════════════════════════════════════════

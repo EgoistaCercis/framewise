@@ -653,6 +653,68 @@ async def ask_agent(video_id: str, req: AskRequest):
     }
 
 
+@app.post("/api/videos/{video_id}/ask_agent_stream")
+async def ask_agent_stream(video_id: str, req: AskRequest):
+    """Agent 流式问答：SSE 推送工具调用状态与最终答案 token"""
+    from fastapi.responses import StreamingResponse
+    import json
+    from backend.services.agent.agent import Agent
+
+    state = video_states.get(video_id)
+    if not state:
+        raise HTTPException(404, "视频不存在")
+    if state["status"] != "ready":
+        raise HTTPException(400, f"视频尚未处理完成，当前状态: {state['status']}")
+
+    context = {
+        "video_id": video_id,
+        "video_hash": state["video_hash"],
+        "video_path": state.get("video_path"),
+        "url": state.get("url"),
+        "is_url_mode": state.get("is_url_mode", False),
+        "timestamp": req.timestamp or 0,
+        "smart": req.smart,
+    }
+
+    agent = Agent(smart=req.smart)
+
+    async def generate():
+        full = ""
+        final_tool_calls = []
+        try:
+            async for event in agent.run_stream(req.question, context):
+                if event["type"] == "content":
+                    full += event["delta"]
+                    yield f"data: {json.dumps({'token': event['delta']})}\n\n".encode()
+                elif event["type"] == "tool":
+                    yield f"data: {json.dumps({'tool': event['name']})}\n\n".encode()
+                elif event["type"] == "done":
+                    final_tool_calls = event["tool_calls"]
+                elif event["type"] == "error":
+                    yield f"data: {json.dumps({'error': event['message']})}\n\n".encode()
+                    return
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n".encode()
+            return
+
+        # 保存对话记录
+        from backend.services.rag_pipeline.conversation_service import save_exchange
+        save_exchange(video_id, req.question, full)
+
+        # 主 agent 闭环结束后，memory agent 独立更新记忆
+        import asyncio
+        from backend.services.agent.memory_agent import MemoryAgent
+        asyncio.create_task(MemoryAgent(smart=req.smart).update_from_conversation(req.question, full))
+
+        yield f"data: {json.dumps({'done': True, 'tool_calls': final_tool_calls})}\n\n".encode()
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/api/videos/{video_id}/ask_stream")
 async def ask_stream(video_id: str, req: AskRequest):
     """流式文本问答：SSE 推送 token"""

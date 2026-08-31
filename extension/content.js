@@ -496,23 +496,43 @@
 
         function finish() { inp.disabled = false; document.getElementById("fw-send").disabled = false; inp.focus(); isProcessing = false; }
 
-        // 统一走 agent 接口（非流式）
+        // 走 agent 流式接口（SSE：token / tool / done / error）
         var body2 = { question: q, timestamp: t, smart: smartMode };
         var bubble = addMsg("assistant", '<span style="color:var(--fw-text-3);">🤖 Agent 思考中...</span>');
-        fetch(API_BASE + "/api/videos/" + videoId + "/ask_agent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body2) })
+        var full = "", toolLog = [];
+        function renderAgent() {
+            var h = "";
+            if (toolLog.length) h += '<div style="font-size:10.5px;color:var(--fw-text-3);margin-bottom:6px;">🛠️ ' + esc(toolLog.join(" → ")) + '</div>';
+            h += renderMd(full);
+            return h;
+        }
+        fetch(API_BASE + "/api/videos/" + videoId + "/ask_agent_stream", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body2) })
             .then(function (r) {
-                if (!r.ok) {
-                    return r.json().then(function (e) { throw new Error(e.detail || ("HTTP " + r.status)); }).catch(function () { throw new Error("HTTP " + r.status); });
+                if (!r.ok) { throw new Error("HTTP " + r.status); }
+                var reader = r.body.getReader();
+                var decoder = new TextDecoder();
+                var buffer = "";
+                function pump() {
+                    return reader.read().then(function (result) {
+                        if (result.done) { finish(); return; }
+                        buffer += decoder.decode(result.value, { stream: true });
+                        var lines = buffer.split("\n");
+                        buffer = lines.pop();
+                        for (var i = 0; i < lines.length; i++) {
+                            var line = lines[i];
+                            if (line.indexOf("data: ") !== 0) continue;
+                            try {
+                                var d = JSON.parse(line.substring(6));
+                                if (d.token) { full += d.token; bubble.innerHTML = renderAgent(); }
+                                else if (d.tool) { toolLog.push(d.tool); bubble.innerHTML = renderAgent(); }
+                                else if (d.done) { bubble.innerHTML = renderAgent(); }
+                                else if (d.error) { bubble.innerHTML = "❌ " + esc(d.error); }
+                            } catch (e) {}
+                        }
+                        return pump();
+                    });
                 }
-                return r.json();
-            })
-            .then(function (data) {
-                var html = renderMd(data.answer || "");
-                if (data.tool_calls && data.tool_calls.length) {
-                    html += '<div style="margin-top:8px;font-size:10.5px;color:var(--fw-text-3);">🛠️ ' + esc(data.tool_calls.join(" → ")) + '</div>';
-                }
-                bubble.innerHTML = html;
-                finish();
+                return pump();
             })
             .catch(function (e) { bubble.innerHTML = "❌ " + ((e && e.message) || "请求失败"); finish(); });
     }
