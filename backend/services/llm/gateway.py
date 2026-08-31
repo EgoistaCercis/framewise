@@ -337,12 +337,16 @@ async def chat_with_tools_stream(messages: list[dict], system_prompt: str = None
                 max_tokens=max_tokens,
                 tools=tools or None,
                 stream=True,
+                stream_options={"include_usage": True},
             ),
             desc="chat_with_tools_stream",
         )
         content_parts = []
         tool_calls = {}  # index -> {"id", "name", "arguments"}
+        stream_usage = {}
         async for chunk in stream:
+            if getattr(chunk, "usage", None):
+                stream_usage = _usage_to_dict(chunk.usage)
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
@@ -365,7 +369,7 @@ async def chat_with_tools_stream(messages: list[dict], system_prompt: str = None
             {"id": e["id"], "name": e["name"], "arguments": e["arguments"]}
             for _, e in sorted(tool_calls.items())
         ]
-        yield {"type": "done", "content": "".join(content_parts), "tool_calls": tc_list}
+        yield {"type": "done", "content": "".join(content_parts), "tool_calls": tc_list, "usage": stream_usage}
     except Exception as e:
         raise RuntimeError(translate_error(e, cfg["provider"])) from e
 

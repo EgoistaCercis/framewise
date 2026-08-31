@@ -15,6 +15,12 @@ from backend.services.media.cache_service import frame_cache_path, frame_cache_e
 
 AUDIO_DIR = os.path.join(DATA_DIR, "audio")
 
+# yt-dlp 拉取 B站需要正确的 UA + Referer，否则返回 412 Precondition Failed
+_HTTP_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Referer": "https://www.bilibili.com/",
+}
+
 
 def get_video_info(url: str) -> dict:
     """
@@ -27,6 +33,8 @@ def get_video_info(url: str) -> dict:
     opts = {
         "quiet": True,
         "no_warnings": True,
+        "force_ipv4": True,
+        "http_headers": _HTTP_HEADERS,
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -118,6 +126,7 @@ def extract_subtitles(url: str) -> list[dict] | None:
         "quiet": True,
         "no_warnings": True,
         "force_ipv4": True,
+        "http_headers": _HTTP_HEADERS,
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

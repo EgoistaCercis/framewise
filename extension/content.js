@@ -150,7 +150,7 @@
         '<div id="fw-head" style="display:flex;align-items:center;gap:6px;padding:9px 12px;border-bottom:1px solid var(--fw-border);cursor:move;user-select:none;flex-shrink:0;">' +
         '<span style="display:flex;align-items:center;gap:7px;font-weight:700;pointer-events:none;color:var(--fw-primary);">' + icon('film', 16) + '帧知</span>' +
         '<span id="fw-status" style="flex:1;font-size:11px;color:var(--fw-text-2);pointer-events:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>' +
-        '<button class="fw-iconbtn" id="fw-auto" title="自动处理">' + icon('zap') + '</button>' +
+        '<button class="fw-iconbtn" id="fw-proc" title="手动处理">' + icon('refresh') + '</button>' +
         '<button class="fw-iconbtn" id="fw-hist" title="历史">' + icon('clock') + '</button>' +
         '<button class="fw-iconbtn" id="fw-quiz" title="考考我">' + icon('help') + '</button>' +
         '<button class="fw-iconbtn" id="fw-settings-btn" title="设置">' + icon('gear') + '</button>' +
@@ -190,7 +190,7 @@
     function hideMini() { mini.style.display = "none"; trigger.style.display = "flex"; }
 
     // ── 事件绑定 ──
-    document.getElementById("fw-auto").onclick = toggleAuto;
+    document.getElementById("fw-proc").onclick = doManualProcess;
     document.getElementById("fw-cls").onclick = hideMini;
     document.getElementById("fw-min").onclick = hideMini;
     document.getElementById("fw-quiz").onclick = function () { if (!window._fwReady) { addMsg("system", "⏳ 等待就绪"); return; } addMsg("system", "🤔 出题中..."); fetch(API_BASE + "/api/videos/" + videoId + "/quiz", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ timestamp: getCurrentTime() }) }).then(function (r) { return r.json(); }).then(function (data) { var h = '<b>📝 小测验 (' + data.context_time + ')：</b><br><br>'; data.questions.forEach(function (q, i) { h += '<div style="margin-bottom:8px;"><b>' + (i + 1) + '. ' + esc(q.question) + '</b>'; h += '<div style="margin-top:3px;cursor:pointer;color:var(--fw-accent);font-size:11px;" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==\'block\'?\'none\':\'block\'">💡 查看答案</div>'; h += '<div style="display:none;background:var(--fw-surface-2);padding:6px 10px;border-radius:6px;margin-top:3px;font-size:12px;border-left:3px solid var(--fw-accent);">' + esc(q.answer) + '</div></div>'; }); addMsg("assistant", h); }).catch(function (e) { addMsg("error", e.message || "请求失败"); }); };
@@ -222,9 +222,10 @@
         '<div style="padding:6px;">' +
         '<div class="fws-item" data-act="smart">' + icon('spark') + '<span>智能模型</span><span class="fws-state" data-for="smart">关</span></div>' +
         '<div id="fw-smart-hint" style="display:none;padding:2px 10px 8px;font-size:10.5px;color:var(--fw-danger);line-height:1.4;">⚠️ 智能模型未配置（请去 .env 配置 SMART_LLM_API_KEY），本次仍使用默认模型</div>' +
-        '<div class="fws-item" data-act="proc">' + icon('refresh') + '<span>手动处理</span></div>' +
+        '<div class="fws-item" data-act="auto">' + icon('zap') + '<span>自动处理</span><span class="fws-state" data-for="auto">关</span></div>' +
         '<div class="fws-item" data-act="copy">' + icon('copy') + '<span>复制对话</span></div>' +
-        '<div class="fws-item" data-act="usage">' + icon('chart') + '<span>今日用量</span></div>' +
+        '<div class="fws-item" data-act="usage">' + icon('chart') + '<span>当前视频用量</span></div>' +
+        '<div class="fws-item" data-act="usage_today">' + icon('chart') + '<span>当天用量</span></div>' +
         '<div class="fws-item" data-act="theme">' + icon('moon') + '<span>主题切换</span></div>' +
         '<div style="padding:10px;border-top:1px solid var(--fw-border);margin-top:4px;">' +
         '<div class="fws-label" style="margin-bottom:6px;display:flex;align-items:center;gap:7px;">' + icon('folder', 14) + '笔记保存目录<span id="fw-note-dir" style="margin-left:auto;color:var(--fw-accent);word-break:break-all;max-width:55%;text-align:right;">未选择</span></div>' +
@@ -260,11 +261,8 @@
     };
 
     function setAutoState() {
-        var btn = document.getElementById("fw-auto");
-        if (btn) {
-            btn.style.color = autoMode ? "var(--fw-accent)" : "var(--fw-text-2)";
-            btn.title = autoMode ? "自动处理：已开启" : "自动处理：已关闭";
-        }
+        var s = setwin.querySelector('.fws-state[data-for="auto"]');
+        if (s) { s.textContent = autoMode ? "开" : "关"; s.style.color = autoMode ? "var(--fw-accent)" : "var(--fw-text-3)"; s.classList.toggle("on", autoMode); }
     }
     function toggleAuto() {
         autoMode = !autoMode;
@@ -351,8 +349,8 @@
         it.onclick = function (ev) {
             ev.stopPropagation();
             var act = it.getAttribute("data-act");
-            if (act === "smart") toggleSmart();
-            else if (act === "proc") doManualProcess();
+            if (act === "auto") toggleAuto();
+            else if (act === "smart") toggleSmart();
             else if (act === "copy") {
                 var body = document.getElementById("fw-msgs").innerText;
                 if (!body.trim()) { addMsg("system", "暂无对话可复制"); return; }
@@ -361,8 +359,14 @@
                 var fail = function () { addMsg("error", "复制失败，请手动选择复制"); };
                 (navigator.clipboard ? navigator.clipboard.writeText("[帧知对话记录]\n" + body) : Promise.reject()).then(done).catch(fail);
             } else if (act === "usage") {
+                if (!videoId) { addMsg("error", "当前没有视频"); return; }
+                fetch(API_BASE + "/api/usage/video/" + videoId).then(function (r) { return r.json(); })
+                    .then(function (d) { addMsg("system", "📊 当前视频用量：" + (d.calls || 0) + " 次 · " +
+                        (d.total_input_tokens || 0) + " in / " + (d.total_output_tokens || 0) + " out tokens · ¥" + (d.total_cost || 0)); })
+                    .catch(function () { addMsg("error", "获取用量失败"); });
+            } else if (act === "usage_today") {
                 fetch(API_BASE + "/api/usage/today").then(function (r) { return r.json(); })
-                    .then(function (d) { addMsg("system", "📊 今日用量：" + (d.calls || 0) + " 次 · " +
+                    .then(function (d) { addMsg("system", "📊 当天用量：" + (d.calls || 0) + " 次 · " +
                         (d.total_input_tokens || 0) + " in / " + (d.total_output_tokens || 0) + " out tokens · ¥" + (d.total_cost || 0)); })
                     .catch(function () { addMsg("error", "获取用量失败"); });
             } else if (act === "theme") toggleTheme();
@@ -391,7 +395,7 @@
         .catch(function () {});
 
     // ── 初始化 ──
-    if (autoMode) { initVideo(); } else { addMsg("system", '<div style="text-align:center;">💡 点击 <b style="color:#00a1d6;">AI字幕</b>，获取精准回答<br/>自动处理已关闭，点击 ⚙️ 手动处理</div>'); }
+    if (autoMode) { initVideo(); } else { addMsg("system", '<div style="text-align:center;">💡 点击 <b style="color:#00a1d6;">AI字幕</b>，获取精准回答<br/>自动处理已关闭，点击顶栏 🔄 手动处理</div>'); }
 
     // ── B站字幕采集 ──
     var _subDone = false;
@@ -455,7 +459,7 @@
 
     // ── 定时任务 ──
     setInterval(function () { if (!window._fwReady) return; var t = getCurrentTime(); document.getElementById("fw-time").textContent = fmt(t); var paused = (document.querySelector("video") || {}).paused; var lbl = document.getElementById("fw-mode-lbl"); if (lbl) { lbl.textContent = paused ? "画面" : "文本"; lbl.style.color = paused ? "var(--fw-accent)" : "var(--fw-text-3)"; } }, 1000);
-    setInterval(function () { var cur = cleanUrl(location.href); if (cur !== lastUrl) { lastUrl = cur; if (autoMode) { videoId = null; window._fwReady = false; updateStatus("⏳ 新视频..."); document.getElementById("fw-input").disabled = true; document.getElementById("fw-send").disabled = true; document.getElementById("fw-msgs").innerHTML = ""; initVideo(); } else { addMsg("system", "🔔 检测到新视频，点击 ⚙️ 手动处理"); } } }, 2000);
+    setInterval(function () { var cur = cleanUrl(location.href); if (cur !== lastUrl) { lastUrl = cur; if (autoMode) { videoId = null; window._fwReady = false; updateStatus("⏳ 新视频..."); document.getElementById("fw-input").disabled = true; document.getElementById("fw-send").disabled = true; document.getElementById("fw-msgs").innerHTML = ""; initVideo(); } else { addMsg("system", "🔔 检测到新视频，点击顶栏 🔄 手动处理"); } } }, 2000);
     var isOffline = false; setInterval(function () { fetch(API_BASE + "/api/health").then(function () { if (isOffline) { isOffline = false; updateStatus("✅ 已重连"); } }).catch(function () { if (!isOffline) { isOffline = true; updateStatus("⚠️ 断线"); } }); }, 10000);
 
     // ── 视频处理 ──

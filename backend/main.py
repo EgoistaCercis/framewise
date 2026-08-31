@@ -351,6 +351,20 @@ async def usage_by_model():
     return get_stats_by_model()
 
 
+@app.get("/api/usage/by_video")
+async def usage_by_video():
+    """按视频分组统计"""
+    from backend.services.llm.cost_service import get_stats_by_video
+    return get_stats_by_video()
+
+
+@app.get("/api/usage/video/{video_id}")
+async def usage_of_video(video_id: str):
+    """单个视频的用量统计"""
+    from backend.services.llm.cost_service import get_video_stats
+    return get_video_stats(video_id)
+
+
 @app.get("/api/usage/history")
 async def usage_history(limit: int = 30):
     """最近调用记录"""

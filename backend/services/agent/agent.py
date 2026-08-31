@@ -101,6 +101,7 @@ class Agent:
                 tools=self.tools_openai,
                 smart=self.smart,
             )
+            self._log_usage(usage, video_id)
 
             # 无工具调用 → 最终答案
             if not message["tool_calls"]:
@@ -166,6 +167,7 @@ class Agent:
                         yield {"type": "content", "delta": event["delta"]}
                     elif event["type"] == "done":
                         tool_calls = event["tool_calls"]
+                        self._log_usage(event.get("usage"), video_id)
             except RuntimeError as e:
                 _log_trace(session_id, video_id, step, "error", str(e))
                 yield {"type": "error", "message": str(e)}
@@ -217,6 +219,27 @@ class Agent:
     async def _compress_tool_result(self, user_intent: str, tool_name: str, tool_result: str) -> str:
         """结合用户意图压缩工具结果（上下文感知，短内容不压缩）"""
         return await self.compress_agent.compress(user_intent, tool_name, tool_result)
+
+    def _log_usage(self, usage: dict, video_id: str):
+        """记录 token 用量到 cost_service"""
+        if not usage:
+            return
+        from backend.services.llm.cost_service import log_usage
+        from backend import config
+        if self.smart:
+            model = config.SMART_LLM_MODEL
+            provider = config.SMART_LLM_PROVIDER
+        else:
+            model = config.LLM_MODEL
+            provider = config.LLM_PROVIDER
+        log_usage(
+            model=model, provider=provider, call_type="chat",
+            input_tokens=usage.get("prompt_tokens", 0),
+            output_tokens=usage.get("completion_tokens", 0),
+            cached_tokens=usage.get("cached_tokens", 0),
+            reasoning_tokens=usage.get("reasoning_tokens", 0),
+            video_id=video_id,
+        )
 
     @staticmethod
     async def _execute_tool(tool_call: dict, context: dict) -> str:

@@ -185,6 +185,66 @@ def get_stats_by_model() -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def get_stats_by_video() -> list[dict]:
+    """按视频分组统计（关联视频标题）"""
+    conn = _get_conn()
+    rows = conn.execute("""
+        SELECT
+            video_id,
+            COUNT(*) as calls,
+            SUM(input_tokens) as total_input,
+            SUM(output_tokens) as total_output,
+            SUM(total_cost) as total_cost
+        FROM usage_log
+        WHERE video_id IS NOT NULL AND video_id != ''
+        GROUP BY video_id
+        ORDER BY total_cost DESC
+    """).fetchall()
+    conn.close()
+
+    result = []
+    for r in rows:
+        title = r["video_id"]
+        try:
+            from backend.main import video_states
+            state = video_states.get(r["video_id"], {})
+            title = state.get("title") or state.get("original_name") or r["video_id"]
+        except Exception:
+            pass
+        result.append({
+            "video_id": r["video_id"],
+            "title": title,
+            "calls": r["calls"],
+            "total_input_tokens": r["total_input"],
+            "total_output_tokens": r["total_output"],
+            "total_cost": round(r["total_cost"], 4),
+        })
+    return result
+
+
+def get_video_stats(video_id: str) -> dict:
+    """单个视频的用量统计"""
+    conn = _get_conn()
+    row = conn.execute("""
+        SELECT
+            COUNT(*) as calls,
+            COALESCE(SUM(input_tokens), 0) as total_input,
+            COALESCE(SUM(output_tokens), 0) as total_output,
+            COALESCE(SUM(total_cost), 0) as total_cost
+        FROM usage_log
+        WHERE video_id = ?
+    """, (video_id,)).fetchone()
+    conn.close()
+
+    return {
+        "video_id": video_id,
+        "calls": row["calls"] or 0,
+        "total_input_tokens": row["total_input"] or 0,
+        "total_output_tokens": row["total_output"] or 0,
+        "total_cost": round(row["total_cost"] or 0, 4),
+    }
+
+
 # 启动时初始化
 init_db()
 logger.debug(f"Usage DB initialized: {DB_PATH}")
