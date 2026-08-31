@@ -11,6 +11,7 @@
     # result = {"answer": str, "steps": int, "tool_calls": [...]}
 """
 import json
+import uuid
 
 from loguru import logger
 
@@ -19,11 +20,37 @@ from backend.services.agent.tools import get_tools_openai, get_tool
 from backend.services.llm import gateway
 
 
+def _new_session() -> str:
+    """生成一次问答的 trace session id"""
+    return uuid.uuid4().hex[:12]
+
+
+def _log_trace(session_id: str, video_id: str, step: int, event_type: str,
+               content: str = "", tool_name: str = None):
+    """记录一条轨迹，失败不影响主流程"""
+    try:
+        from backend.services.trace_service import log_trace
+        log_trace(session_id, video_id, step, event_type, content, tool_name)
+    except Exception:
+        pass
+
+
 def _load_memory_context() -> str:
     """加载长期记忆（默认全量）。作为独立消息注入 messages 列表，避免污染 system prompt 缓存。"""
     try:
         from backend.services.memory.memory_service import format_cards_for_prompt
         return format_cards_for_prompt()
+    except Exception:
+        return ""
+
+
+async def _load_conversation_context(video_id: str) -> str:
+    """加载历史对话上下文（含四层压缩），作为独立消息注入。"""
+    if not video_id:
+        return ""
+    try:
+        from backend.services.rag_pipeline.conversation_service import get_recent_context
+        return await get_recent_context(video_id)
     except Exception:
         return ""
 
@@ -38,8 +65,8 @@ class Agent:
         self.smart = smart
         self.tools_openai = get_tools_openai(tools)
 
-    def _build_messages(self, user_message: str) -> list[dict]:
-        """构造初始消息列表。长期记忆作为独立消息（XML 标签）注入，
+    async def _build_messages(self, user_message: str, context: dict) -> list[dict]:
+        """构造初始消息列表。长期记忆与历史对话作为独立消息（XML 标签）注入，
         保持 system prompt 稳定以命中前缀缓存。"""
         messages = []
         memory_text = _load_memory_context()
@@ -48,13 +75,22 @@ class Agent:
                 "role": "user",
                 "content": f"<memory>\n{memory_text.strip()}\n</memory>",
             })
+        conv_ctx = await _load_conversation_context(context.get("video_id"))
+        if conv_ctx:
+            messages.append({
+                "role": "user",
+                "content": f"<conversation>\n{conv_ctx.strip()}\n</conversation>",
+            })
         messages.append({"role": "user", "content": user_message})
         return messages
 
     async def run(self, user_message: str, context: dict) -> dict:
         """执行 agent loop，返回 {"answer", "steps", "tool_calls"}"""
-        messages = self._build_messages(user_message)
+        messages = await self._build_messages(user_message, context)
         tool_call_log = []
+        session_id = _new_session()
+        video_id = context.get("video_id")
+        _log_trace(session_id, video_id, 0, "user", user_message)
 
         for step in range(1, self.max_iterations + 1):
             message, usage = await gateway.chat_with_tools(
@@ -66,6 +102,7 @@ class Agent:
 
             # 无工具调用 → 最终答案
             if not message["tool_calls"]:
+                _log_trace(session_id, video_id, step, "answer", message["content"])
                 return {
                     "answer": message["content"],
                     "steps": step,
@@ -79,7 +116,11 @@ class Agent:
 
             # 逐个执行工具，结果作为 tool 消息回填
             for tc in tool_calls:
+                _log_trace(session_id, video_id, step, "tool_call",
+                           json.dumps({"name": tc["name"], "arguments": tc["arguments"]}, ensure_ascii=False),
+                           tool_name=tc["name"])
                 result = await self._execute_tool(tc, context)
+                _log_trace(session_id, video_id, step, "tool_result", result, tool_name=tc["name"])
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
@@ -87,6 +128,7 @@ class Agent:
                 })
 
         logger.warning(f"Agent 达到最大迭代轮次 {self.max_iterations}，强制结束")
+        _log_trace(session_id, video_id, self.max_iterations, "error", "达到最大迭代轮次")
         return {
             "answer": "抱歉，这个问题比较复杂，我尝试了多次仍未完成。请换一种方式提问。",
             "steps": self.max_iterations,
@@ -100,8 +142,11 @@ class Agent:
         - {"type": "done", "answer", "steps", "tool_calls"}  结束
         - {"type": "error", "message": str}    错误
         """
-        messages = self._build_messages(user_message)
+        messages = await self._build_messages(user_message, context)
         tool_call_log = []
+        session_id = _new_session()
+        video_id = context.get("video_id")
+        _log_trace(session_id, video_id, 0, "user", user_message)
 
         for step in range(1, self.max_iterations + 1):
             full_content = ""
@@ -119,11 +164,13 @@ class Agent:
                     elif event["type"] == "done":
                         tool_calls = event["tool_calls"]
             except RuntimeError as e:
+                _log_trace(session_id, video_id, step, "error", str(e))
                 yield {"type": "error", "message": str(e)}
                 return
 
             # 无工具调用 → 最终答案（content 已流式 yield）
             if not tool_calls:
+                _log_trace(session_id, video_id, step, "answer", full_content)
                 yield {"type": "done", "answer": full_content, "steps": step, "tool_calls": tool_call_log}
                 return
 
@@ -131,10 +178,15 @@ class Agent:
             tool_call_log.extend([tc["name"] for tc in tool_calls])
             messages.append(self._assistant_message({"content": full_content, "tool_calls": tool_calls}))
             for tc in tool_calls:
+                _log_trace(session_id, video_id, step, "tool_call",
+                           json.dumps({"name": tc["name"], "arguments": tc["arguments"]}, ensure_ascii=False),
+                           tool_name=tc["name"])
                 yield {"type": "tool", "name": tc["name"]}
                 result = await self._execute_tool(tc, context)
+                _log_trace(session_id, video_id, step, "tool_result", result, tool_name=tc["name"])
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
 
+        _log_trace(session_id, video_id, self.max_iterations, "error", "达到最大迭代轮次")
         yield {
             "type": "done",
             "answer": "抱歉，这个问题比较复杂，我尝试了多次仍未完成。请换一种方式提问。",
