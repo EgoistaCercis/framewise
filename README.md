@@ -77,20 +77,20 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 8123
 
 ```
 用户 → Chrome 插件 / Web 前端
-         ↓ FastAPI 网关层（backend.main：CORS + Loguru + 视频状态管理）
          ↓
- ┌───────┼──────────┬──────────────┐
- ↓       ↓          ↓
-视频摄取   ASR      RAG 检索
-(url_*) (asr_*)  (vector_store / embedding)
- └───────┴──────────┴───────┬─────┘
-                            ↓
-       模型网关 gateway.py（统一 OpenAI 协议）
-        chat / embed / vision / asr（含重试 + default/smart 路由）
-                            ↓
+    FastAPI 网关（backend.main：CORS + 日志 + 视频状态管理）
+         ↓
+      Agent 层（services/agent/）
+      ├ 主 agent：ReAct loop，工具 = rag_answer / analyze_frame / generate_quiz / write_file / read_file
+      ├ memory agent：长期记忆（JSON cards 三层：类别 → 子类别 → 键值对）
+      └ compress agent：工具结果上下文感知压缩
+         ↓
+     模型网关 gateway.py（统一 OpenAI 协议 + function calling + 重试 + default/smart 路由）
+         ↓
      多模态 LLM（DeepSeek / Qwen VL / BGE-M3 / SenseVoice）
-                            ↑
-         pricing_service 定价 · cost_service 用量统计
+
+横向基础设施：
+  pricing（定价版本历史） · cost（用量分视频统计） · trace（轨迹落盘） · memory（记忆）
 ```
 
 ## 📁 项目结构
@@ -98,15 +98,20 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 8123
 ```
 framewise/
 ├── backend/                    # FastAPI 后端
-│   ├── main.py                 # API 路由 + 应用入口
+│   ├── main.py                 # API 路由 + 应用入口 + 笔记目录接口
 │   ├── config.py               # 配置管理（.env 驱动）
-│   ├── prompts.py              # 统一提示词管理（预留 memory/skill 注入）
+│   ├── prompts.py              # 统一提示词（主/memory/compress/agent）
 │   └── services/
+│       ├── agent/              # Agent 层
+│       │   ├── agent.py        # 主 agent（ReAct loop）
+│       │   ├── tools.py        # 工具集（rag_answer/analyze_frame/generate_quiz/write_file/read_file）
+│       │   ├── memory_agent.py # 记忆代理（save/recall/delete）
+│       │   └── compress_agent.py # 工具结果上下文感知压缩
 │       ├── llm/                # 模型网关 / 厂商 / 定价 / 用量
-│       │   ├── gateway         # OpenAI 统一网关（chat/embed/vision/asr，重试 + smart 路由）
+│       │   ├── gateway         # OpenAI 统一网关（chat/embed/vision/asr + tool calls + 重试 + smart 路由）
 │       │   ├── provider_service# 厂商标配查询
 │       │   ├── pricing_service # 模型定价（带版本历史）
-│       │   └── cost_service    # token 用量与费用统计
+│       │   └── cost_service    # token 用量与费用统计（分视频）
 │       ├── media/              # 多媒体摄取与理解
 │       │   ├── url_service     # 视频/字幕获取
 │       │   ├── asr_service     # 语音识别（本地 whisper）
@@ -119,14 +124,15 @@ framewise/
 │       │   ├── embedding_service    # 向量化
 │       │   ├── vector_store    # FAISS 检索
 │       │   └── chunk_service   # 字幕切分
-│       └── memory/             # 长期记忆（为 memory 系统预留）
-│           └── memory_service
+│       ├── memory/             # 长期记忆存储（JSON cards 三层）
+│       │   └── memory_service
+│       └── trace_service.py    # 轨迹记录（append-only + 大内容落盘）
 ├── extension/                  # Chrome 插件
 │   ├── content.js              # B站/YouTube 注入
 │   └── manifest.json
 ├── frontend/                   # Web 前端
 │   └── static/
-├── scripts/  evaluation/  docs/  data/
+├── scripts/  evaluation/  docs/  data/  CONTRIBUTING.md
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
