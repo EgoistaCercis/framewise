@@ -17,6 +17,7 @@ UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
 SUBTITLE_DIR = os.path.join(DATA_DIR, "subtitles")
 EMBEDDING_DIR = os.path.join(DATA_DIR, "embeddings")
 FRAME_DIR = os.path.join(DATA_DIR, "frames")
+NOTE_DIR = os.getenv("NOTE_DIR", os.path.join(DATA_DIR, "notes"))
 
 # ═══════════════════════════════════════════
 # API 厂商标配（在 .env 中配置，无需改代码）

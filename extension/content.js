@@ -228,36 +228,29 @@
         '<div class="fws-item" data-act="usage_today">' + icon('chart') + '<span>当天用量</span></div>' +
         '<div class="fws-item" data-act="theme">' + icon('moon') + '<span>主题切换</span></div>' +
         '<div style="padding:10px;border-top:1px solid var(--fw-border);margin-top:4px;">' +
-        '<div class="fws-label" style="margin-bottom:6px;display:flex;align-items:center;gap:7px;">' + icon('folder', 14) + '笔记保存目录<span id="fw-note-dir" style="margin-left:auto;color:var(--fw-accent);word-break:break-all;max-width:55%;text-align:right;">未选择</span></div>' +
-        '<button id="fw-note-pick" style="width:100%;padding:7px;background:var(--fw-surface);border:1px solid var(--fw-primary);border-radius:8px;color:var(--fw-primary);cursor:pointer;font-size:11.5px;transition:background .18s ease;" onmouseenter="this.style.background=\'var(--fw-surface-2)\'" onmouseleave="this.style.background=\'var(--fw-surface)\'">选择目录…</button>' +
-        '<input type="file" id="fw-note-dir-picker" webkitdirectory style="display:none;">' +
-        '<div class="fws-hint" style="margin-top:6px;font-size:10px;">笔记由 Agent 通过对话生成，请选择保存目录</div></div>' +
+        '<div class="fws-label" style="margin-bottom:6px;display:flex;align-items:center;gap:7px;">' + icon('folder', 14) + '笔记保存目录<span id="fw-note-dir" style="margin-left:auto;color:var(--fw-accent);word-break:break-all;max-width:55%;text-align:right;">加载中…</span></div>' +
+        '<div style="display:flex;gap:4px;">' +
+        '<input id="fw-note-input" placeholder="后端文件路径" style="flex:1;padding:7px 8px;background:var(--fw-surface);border:1px solid var(--fw-border);border-radius:8px;color:var(--fw-text);font-size:11.5px;outline:none;">' +
+        '<button id="fw-note-save" style="padding:7px 10px;background:var(--fw-primary);border:none;border-radius:8px;color:#fff;cursor:pointer;font-size:11.5px;">保存</button></div>' +
+        '<div class="fws-hint" style="margin-top:6px;font-size:10px;">笔记由 Agent 写入后端笔记目录（write_file 工具）</div></div>' +
         '</div>';
     setwin.style.left = (window.innerWidth - 280) + "px";
     setwin.style.top = "110px";
     document.body.appendChild(setwin);
     var noteDir = document.getElementById("fw-note-dir");
-    var savedDir = localStorage.getItem("fw_note_dir");
-    if (savedDir) noteDir.textContent = savedDir;
-    function setNoteDir(dir) {
-        if (!dir) return;
-        localStorage.setItem("fw_note_dir", dir);
-        noteDir.textContent = dir;
-        addMsg("system", "📁 笔记保存目录已设置：" + dir);
-    }
-    document.getElementById("fw-note-pick").onclick = function (ev) {
+    var noteInput = document.getElementById("fw-note-input");
+    // 加载后端当前 NOTE_DIR
+    fetch(API_BASE + "/api/note_dir").then(function (r) { return r.json(); })
+        .then(function (d) { noteDir.textContent = d.note_dir; noteInput.value = d.note_dir; })
+        .catch(function () { noteDir.textContent = "获取失败"; });
+    document.getElementById("fw-note-save").onclick = function (ev) {
         ev.stopPropagation();
-        if (window.showDirectoryPicker) {
-            window.showDirectoryPicker()
-                .then(function (h) { setNoteDir(h && h.name); })
-                .catch(function (e) { if (!e || e.name !== "AbortError") addMsg("error", "选择目录失败"); });
-        } else {
-            document.getElementById("fw-note-dir-picker").click();
-        }
-    };
-    document.getElementById("fw-note-dir-picker").onchange = function () {
-        var fl = this.files;
-        if (fl && fl.length) { setNoteDir(fl[0].webkitRelativePath.split("/")[0] || fl[0].name); }
+        var path = noteInput.value.trim();
+        if (!path) { addMsg("error", "路径不能为空"); return; }
+        fetch(API_BASE + "/api/note_dir", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note_dir: path }) })
+            .then(function (r) { return r.json(); })
+            .then(function (d) { noteDir.textContent = d.note_dir; addMsg("system", "📁 笔记保存目录已设置：" + d.note_dir); })
+            .catch(function () { addMsg("error", "设置失败"); });
     };
 
     function setAutoState() {

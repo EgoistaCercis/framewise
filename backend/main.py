@@ -84,6 +84,24 @@ async def log_requests(request, call_next):
 STATES_FILE = os.path.join(DATA_DIR, "video_states.json")
 video_states: dict = {}
 
+def _save_note_dir_to_env(path: str):
+    """把 NOTE_DIR 写入 .env（存在则替换，不存在则追加）"""
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    lines = []
+    if os.path.exists(env_path):
+        with open(env_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    found = False
+    with open(env_path, "w", encoding="utf-8") as f:
+        for line in lines:
+            if line.strip().startswith("NOTE_DIR="):
+                f.write(f"NOTE_DIR={path}\n")
+                found = True
+            else:
+                f.write(line)
+        if not found:
+            f.write(f"NOTE_DIR={path}\n")
+
 def _save_states():
     """持久化 video_states 到文件"""
     try:
@@ -161,6 +179,33 @@ async def llm_config():
         "smart_provider": _c.SMART_LLM_PROVIDER if smart_configured else None,
         "smart_model": _c.SMART_LLM_MODEL if smart_configured else None,
     }
+
+
+@app.get("/api/note_dir")
+async def get_note_dir():
+    """返回当前笔记保存目录（后端文件系统路径）"""
+    from backend import config as _c
+    return {"note_dir": _c.NOTE_DIR}
+
+
+class NoteDirUpdate(BaseModel):
+    note_dir: str
+
+
+@app.post("/api/note_dir")
+async def set_note_dir(req: NoteDirUpdate):
+    """设置笔记保存目录（更新内存 + 持久化到 .env）"""
+    from backend import config as _c
+    import os as _os
+
+    path = req.note_dir.strip()
+    if not path:
+        raise HTTPException(400, "路径不能为空")
+    _os.makedirs(path, exist_ok=True)
+    _c.NOTE_DIR = path
+    _save_note_dir_to_env(path)
+    logger.info(f"笔记目录已设置为: {path}")
+    return {"note_dir": _c.NOTE_DIR}
 
 
 @app.get("/api/memory")
