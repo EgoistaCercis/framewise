@@ -165,17 +165,17 @@ async def llm_config():
 
 @app.get("/api/memory")
 async def list_memory():
-    """查看长期记忆"""
-    from backend.services.memory.memory_service import get_all_memories
-    return get_all_memories()
+    """查看长期记忆（三层结构：类别→子类别→键值对）"""
+    from backend.services.memory.memory_service import get_all_cards
+    return get_all_cards()
 
 
 @app.delete("/api/memory")
 async def clear_memory():
     """清空长期记忆"""
-    from backend.services.memory.memory_service import get_all_memories, delete_memory
-    for m in get_all_memories():
-        delete_memory(m["key"])
+    from backend.services.memory.memory_service import get_all_cards, delete_card
+    for category in list(get_all_cards().keys()):
+        delete_card(category)
     return {"status": "ok"}
 
 
@@ -597,6 +597,58 @@ async def ask_question(video_id: str, req: AskRequest):
         "question": req.question,
         "answer": result["answer"],
         "references": result["references"],
+        "timestamp": req.timestamp,
+    }
+
+
+@app.post("/api/videos/{video_id}/ask_agent")
+async def ask_agent(video_id: str, req: AskRequest):
+    """Agent 问答：通过 agent loop 自主调用工具完成复杂任务"""
+    from backend.services.agent.agent import Agent
+
+    state = video_states.get(video_id)
+    if not state:
+        raise HTTPException(404, "视频不存在")
+    if state["status"] != "ready":
+        raise HTTPException(400, f"视频尚未处理完成，当前状态: {state['status']}")
+
+    context = {
+        "video_id": video_id,
+        "video_hash": state["video_hash"],
+        "video_path": state.get("video_path"),
+        "url": state.get("url"),
+        "is_url_mode": state.get("is_url_mode", False),
+        "timestamp": req.timestamp or 0,
+        "smart": req.smart,
+    }
+
+    try:
+        agent = Agent(smart=req.smart)
+        result = await agent.run(req.question, context)
+    except FileNotFoundError:
+        state["status"] = "error"
+        state["error"] = "索引文件丢失，请点击🔄按钮重新处理"
+        _save_states()
+        raise HTTPException(410, "索引丢失，请重新处理该视频")
+    except RuntimeError as e:
+        logger.error(f"[{video_id}] Agent error: {e}")
+        raise HTTPException(503, detail=str(e))
+
+    # 保存对话记录
+    from backend.services.rag_pipeline.conversation_service import save_exchange
+    save_exchange(video_id, req.question, result["answer"])
+
+    # 主 agent 闭环结束后，memory agent 独立更新记忆（后台不阻塞）
+    import asyncio
+    from backend.services.agent.memory_agent import MemoryAgent
+    asyncio.create_task(MemoryAgent(smart=req.smart).update_from_conversation(req.question, result["answer"]))
+
+    return {
+        "video_id": video_id,
+        "question": req.question,
+        "answer": result["answer"],
+        "steps": result["steps"],
+        "tool_calls": result["tool_calls"],
         "timestamp": req.timestamp,
     }
 

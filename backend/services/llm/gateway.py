@@ -225,6 +225,51 @@ async def chat(messages: list[dict], system_prompt: str = None,
         raise RuntimeError(translate_error(e, cfg["provider"])) from e
 
 
+async def chat_with_tools(messages: list[dict], system_prompt: str = None,
+                          tools: list[dict] = None, temperature: float = 0.7,
+                          max_tokens: int = None, smart: bool = False) -> tuple[dict, dict]:
+    """支持 function calling 的 LLM 对话。
+
+    参数:
+        tools: OpenAI function calling 格式的 tool 定义列表
+    返回:
+        (message, usage)
+        message = {"content": str, "tool_calls": [{"id","name","arguments"}]}
+    """
+    if max_tokens is None:
+        max_tokens = config.LLM_MAX_TOKENS
+    cfg = _chat_cfg(smart)
+    client = await _client(cfg)
+
+    msgs = []
+    if system_prompt:
+        msgs.append({"role": "system", "content": system_prompt})
+    msgs.extend(messages)
+
+    try:
+        resp = await _with_retry(
+            lambda: client.chat.completions.create(
+                model=cfg["model"],
+                messages=msgs,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                tools=tools or None,
+            ),
+            desc="chat_with_tools",
+        )
+        msg = resp.choices[0].message
+        message = {
+            "content": msg.content or "",
+            "tool_calls": [
+                {"id": tc.id, "name": tc.function.name, "arguments": tc.function.arguments}
+                for tc in (msg.tool_calls or [])
+            ],
+        }
+        return message, _usage_to_dict(resp.usage)
+    except Exception as e:
+        raise RuntimeError(translate_error(e, cfg["provider"])) from e
+
+
 async def chat_stream(messages: list[dict], system_prompt: str = None,
                       temperature: float = 0.7, max_tokens: int = None,
                       smart: bool = False):
