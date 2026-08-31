@@ -150,6 +150,7 @@
         '<div id="fw-head" style="display:flex;align-items:center;gap:6px;padding:9px 12px;border-bottom:1px solid var(--fw-border);cursor:move;user-select:none;flex-shrink:0;">' +
         '<span style="display:flex;align-items:center;gap:7px;font-weight:700;pointer-events:none;color:var(--fw-primary);">' + icon('film', 16) + '帧知</span>' +
         '<span id="fw-status" style="flex:1;font-size:11px;color:var(--fw-text-2);pointer-events:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>' +
+        '<button class="fw-iconbtn" id="fw-auto" title="自动处理">' + icon('zap') + '</button>' +
         '<button class="fw-iconbtn" id="fw-hist" title="历史">' + icon('clock') + '</button>' +
         '<button class="fw-iconbtn" id="fw-quiz" title="考考我">' + icon('help') + '</button>' +
         '<button class="fw-iconbtn" id="fw-settings-btn" title="设置">' + icon('gear') + '</button>' +
@@ -189,6 +190,7 @@
     function hideMini() { mini.style.display = "none"; trigger.style.display = "flex"; }
 
     // ── 事件绑定 ──
+    document.getElementById("fw-auto").onclick = toggleAuto;
     document.getElementById("fw-cls").onclick = hideMini;
     document.getElementById("fw-min").onclick = hideMini;
     document.getElementById("fw-quiz").onclick = function () { if (!window._fwReady) { addMsg("system", "⏳ 等待就绪"); return; } addMsg("system", "🤔 出题中..."); fetch(API_BASE + "/api/videos/" + videoId + "/quiz", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ timestamp: getCurrentTime() }) }).then(function (r) { return r.json(); }).then(function (data) { var h = '<b>📝 小测验 (' + data.context_time + ')：</b><br><br>'; data.questions.forEach(function (q, i) { h += '<div style="margin-bottom:8px;"><b>' + (i + 1) + '. ' + esc(q.question) + '</b>'; h += '<div style="margin-top:3px;cursor:pointer;color:var(--fw-accent);font-size:11px;" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==\'block\'?\'none\':\'block\'">💡 查看答案</div>'; h += '<div style="display:none;background:var(--fw-surface-2);padding:6px 10px;border-radius:6px;margin-top:3px;font-size:12px;border-left:3px solid var(--fw-accent);">' + esc(q.answer) + '</div></div>'; }); addMsg("assistant", h); }).catch(function (e) { addMsg("error", e.message || "请求失败"); }); };
@@ -212,13 +214,12 @@
     var setwin = document.createElement("div");
     setwin.id = "fw-setwin";
     setwin.className = "fw-widget";
-    setwin.style.cssText = "position:fixed;z-index:2147483645;border:1px solid var(--fw-border);border-radius:12px;box-shadow:var(--fw-shadow);display:none;min-width:230px;font-size:12px;";
+    setwin.style.cssText = "position:fixed;z-index:2147483645;border:1px solid var(--fw-border);border-radius:12px;box-shadow:var(--fw-shadow);display:none;width:240px;font-size:12px;";
     setwin.innerHTML =
         '<div id="fw-set-head" style="display:flex;align-items:center;gap:6px;padding:9px 12px;border-bottom:1px solid var(--fw-border);cursor:move;user-select:none;">' +
         '<span style="display:flex;align-items:center;gap:7px;font-weight:600;">' + icon('gear', 15) + '设置</span><span style="flex:1;"></span>' +
         '<button class="fw-iconbtn" id="fw-set-close" title="关闭">' + icon('close', 14) + '</button></div>' +
         '<div style="padding:6px;">' +
-        '<div class="fws-item" data-act="auto">' + icon('zap') + '<span>自动处理</span><span class="fws-state" data-for="auto">关</span></div>' +
         '<div class="fws-item" data-act="smart">' + icon('spark') + '<span>智能模型</span><span class="fws-state" data-for="smart">关</span></div>' +
         '<div id="fw-smart-hint" style="display:none;padding:2px 10px 8px;font-size:10.5px;color:var(--fw-danger);line-height:1.4;">⚠️ 智能模型未配置（请去 .env 配置 SMART_LLM_API_KEY），本次仍使用默认模型</div>' +
         '<div class="fws-item" data-act="proc">' + icon('refresh') + '<span>手动处理</span></div>' +
@@ -259,8 +260,11 @@
     };
 
     function setAutoState() {
-        var s = setwin.querySelector('.fws-state[data-for="auto"]');
-        if (s) { s.textContent = autoMode ? "开" : "关"; s.classList.toggle("on", autoMode); }
+        var btn = document.getElementById("fw-auto");
+        if (btn) {
+            btn.style.color = autoMode ? "var(--fw-accent)" : "var(--fw-text-2)";
+            btn.title = autoMode ? "自动处理：已开启" : "自动处理：已关闭";
+        }
     }
     function toggleAuto() {
         autoMode = !autoMode;
@@ -347,8 +351,7 @@
         it.onclick = function (ev) {
             ev.stopPropagation();
             var act = it.getAttribute("data-act");
-            if (act === "auto") toggleAuto();
-            else if (act === "smart") toggleSmart();
+            if (act === "smart") toggleSmart();
             else if (act === "proc") doManualProcess();
             else if (act === "copy") {
                 var body = document.getElementById("fw-msgs").innerText;
@@ -380,6 +383,7 @@
     var videoId = null, autoMode = localStorage.getItem("fw_auto") !== "false", isProcessing = false;
     var lastUrl = cleanUrl(location.href);
     window._fwReady = false;
+    setAutoState();  // 初始化顶栏「自动处理」按钮状态
 
     // 页面加载时预读 smart 配置一次，之后点击智能模型不再发请求验证
     fetch(API_BASE + "/api/llm_config").then(function (r) { return r.json(); })
@@ -492,45 +496,23 @@
 
         function finish() { inp.disabled = false; document.getElementById("fw-send").disabled = false; inp.focus(); isProcessing = false; }
 
-        // 画面模式：走流式 ask_frame_stream（先分析画面，再流式回答）
+        // 统一走 agent 接口（非流式）
         var body2 = { question: q, timestamp: t, smart: smartMode };
-        if (isVision) {
-            var frame = captureFrame();
-            if (frame) body2.frame_base64 = frame;
-        }
-        var bubble = addMsg("assistant", '<span style="color:var(--fw-text-3);">🖼️ 分析画面中...</span>');
-        var full = "", finalRefs = [];
-        var endpoint = isVision ? "ask_frame_stream" : "ask_stream";
-        fetch(API_BASE + "/api/videos/" + videoId + "/" + endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body2) })
+        var bubble = addMsg("assistant", '<span style="color:var(--fw-text-3);">🤖 Agent 思考中...</span>');
+        fetch(API_BASE + "/api/videos/" + videoId + "/ask_agent", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body2) })
             .then(function (r) {
-                if (!r.ok) { throw new Error("HTTP " + r.status); }
-                var reader = r.body.getReader();
-                var decoder = new TextDecoder();
-                var buffer = "";
-                function pump() {
-                    return reader.read().then(function (result) {
-                        if (result.done) {
-                            bubble.innerHTML = renderMd(full) + renderRefs(finalRefs);
-                            finish();
-                            return;
-                        }
-                        buffer += decoder.decode(result.value, { stream: true });
-                        var lines = buffer.split("\n");
-                        buffer = lines.pop();
-                        for (var i = 0; i < lines.length; i++) {
-                            var line = lines[i];
-                            if (line.indexOf("data: ") !== 0) continue;
-                            try {
-                                var d = JSON.parse(line.substring(6));
-                                if (d.token) { full += d.token; bubble.innerHTML = renderMd(full); }
-                                else if (d.done) { finalRefs = d.references || []; }
-                                else if (d.error) { bubble.innerHTML = "❌ " + d.error; }
-                            } catch (e) {}
-                        }
-                        return pump();
-                    });
+                if (!r.ok) {
+                    return r.json().then(function (e) { throw new Error(e.detail || ("HTTP " + r.status)); }).catch(function () { throw new Error("HTTP " + r.status); });
                 }
-                return pump();
+                return r.json();
+            })
+            .then(function (data) {
+                var html = renderMd(data.answer || "");
+                if (data.tool_calls && data.tool_calls.length) {
+                    html += '<div style="margin-top:8px;font-size:10.5px;color:var(--fw-text-3);">🛠️ ' + esc(data.tool_calls.join(" → ")) + '</div>';
+                }
+                bubble.innerHTML = html;
+                finish();
             })
             .catch(function (e) { bubble.innerHTML = "❌ " + ((e && e.message) || "请求失败"); finish(); });
     }

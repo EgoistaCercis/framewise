@@ -300,7 +300,7 @@ async def extract_memory(question: str, answer: str):
     从一轮问答中提取值得长期记住的信息（用户偏好、学习主题等）
     调用 LLM 提取，结果存到 memory
     """
-    from backend.services.memory.memory_service import set_memory
+    from backend.services.memory.memory_service import set_card
     from backend.services.llm.gateway import chat
     from backend.config import LLM_MAX_TOKENS
 
@@ -334,13 +334,13 @@ AI回答：{answer[:300]}"""
         if text == "无" or not text:
             return
 
-        # 解析并存储
+        # 解析并存储（三层结构：类别/子类别/键）
         for line in text.split("\n"):
             line = line.strip()
             if line.startswith("偏好：") and len(line) > 3:
-                set_memory("user_preference", line[3:])
+                set_card("preferences", "answer_style", "style", line[3:])
             elif line.startswith("主题：") and len(line) > 3:
-                set_memory("learning_topic", line[3:])
+                set_card("learning", "topics", "current", line[3:])
     except Exception as e:
         logger.debug(f"Memory extraction failed: {e}")
 
