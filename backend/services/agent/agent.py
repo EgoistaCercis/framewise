@@ -93,6 +93,55 @@ class Agent:
             "tool_calls": tool_call_log,
         }
 
+    async def run_stream(self, user_message: str, context: dict):
+        """流式 agent loop，yield 事件 dict：
+        - {"type": "content", "delta": str}    最终答案 token
+        - {"type": "tool", "name": str}        工具调用状态
+        - {"type": "done", "answer", "steps", "tool_calls"}  结束
+        - {"type": "error", "message": str}    错误
+        """
+        messages = self._build_messages(user_message)
+        tool_call_log = []
+
+        for step in range(1, self.max_iterations + 1):
+            full_content = ""
+            tool_calls = []
+            try:
+                async for event in gateway.chat_with_tools_stream(
+                    messages,
+                    system_prompt=self.system_prompt,
+                    tools=self.tools_openai,
+                    smart=self.smart,
+                ):
+                    if event["type"] == "content":
+                        full_content += event["delta"]
+                        yield {"type": "content", "delta": event["delta"]}
+                    elif event["type"] == "done":
+                        tool_calls = event["tool_calls"]
+            except RuntimeError as e:
+                yield {"type": "error", "message": str(e)}
+                return
+
+            # 无工具调用 → 最终答案（content 已流式 yield）
+            if not tool_calls:
+                yield {"type": "done", "answer": full_content, "steps": step, "tool_calls": tool_call_log}
+                return
+
+            # 工具轮：推送工具状态并执行
+            tool_call_log.extend([tc["name"] for tc in tool_calls])
+            messages.append(self._assistant_message({"content": full_content, "tool_calls": tool_calls}))
+            for tc in tool_calls:
+                yield {"type": "tool", "name": tc["name"]}
+                result = await self._execute_tool(tc, context)
+                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
+
+        yield {
+            "type": "done",
+            "answer": "抱歉，这个问题比较复杂，我尝试了多次仍未完成。请换一种方式提问。",
+            "steps": self.max_iterations,
+            "tool_calls": tool_call_log,
+        }
+
     @staticmethod
     def _assistant_message(message: dict) -> dict:
         """把 chat_with_tools 返回的 message 转成 OpenAI 对话消息格式"""
