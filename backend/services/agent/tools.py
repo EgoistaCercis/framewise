@@ -55,6 +55,14 @@ class Tool:
         """
         raise NotImplementedError
 
+    def requires_confirmation(self, **kwargs) -> bool:
+        """是否为高危操作、执行前需要用户批准。默认不需要。"""
+        return False
+
+    def confirm_message(self, **kwargs) -> str:
+        """需要确认时，展示给用户的提示语。"""
+        return f"即将执行 {self.name}，是否继续？"
+
 
 class RagAnswerTool(Tool):
     """检索视频字幕，返回相关片段（不生成最终答案，交给 Agent 组织）"""
@@ -164,6 +172,18 @@ class WriteFileTool(Tool):
             f.write(content)
         return f"已写入文件：{filename}"
 
+    def requires_confirmation(self, filename: str = "", **kwargs) -> bool:
+        """覆盖已有文件时需用户确认"""
+        import os
+        from backend.config import NOTE_DIR
+        if not filename:
+            return False
+        os.makedirs(NOTE_DIR, exist_ok=True)
+        return os.path.exists(os.path.join(NOTE_DIR, filename))
+
+    def confirm_message(self, filename: str = "", **kwargs) -> str:
+        return f"即将覆盖笔记文件「{filename}」，是否继续？"
+
 
 class ReadFileTool(Tool):
     """读取笔记目录中的文件"""
@@ -191,6 +211,34 @@ class ReadFileTool(Tool):
             f"{content}\n"
             "</external_content>"
         )
+
+
+class DeleteFileTool(Tool):
+    """删除笔记目录中的文件"""
+    name = "delete_file"
+    description = "当需要删除笔记目录中的文件时调用。"
+    parameters = {
+        "type": "object",
+        "properties": {
+            "filename": {"type": "string", "description": "要删除的文件名（相对笔记目录）"},
+        },
+        "required": ["filename"],
+    }
+
+    async def run(self, context: dict, filename: str = "", **kwargs) -> str:
+        import os
+        path = _safe_note_path(filename)
+        if not os.path.exists(path):
+            return f"文件不存在：{filename}"
+        os.remove(path)
+        return f"已删除文件：{filename}"
+
+    def requires_confirmation(self, **kwargs) -> bool:
+        """删除文件总是高危操作，需用户确认"""
+        return True
+
+    def confirm_message(self, filename: str = "", **kwargs) -> str:
+        return f"即将删除笔记文件「{filename}」，此操作不可撤销，是否继续？"
 
 
 class SaveMemoryTool(Tool):
@@ -256,6 +304,7 @@ MAIN_TOOLS: list[Tool] = [
     GenerateQuizTool(),
     WriteFileTool(),
     ReadFileTool(),
+    DeleteFileTool(),
 ]
 
 # 记忆 agent 工具：记忆的增删改查

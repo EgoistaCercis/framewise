@@ -509,12 +509,26 @@
                 var reader = r.body.getReader();
                 var decoder = new TextDecoder();
                 var buffer = "";
-                function pump() {
-                    return reader.read().then(function (result) {
-                        if (result.done) { finish(); return; }
-                        buffer += decoder.decode(result.value, { stream: true });
-                        var lines = buffer.split("\n");
-                        buffer = lines.pop();
+                function showConfirmBox(message) {
+                    return new Promise(function (resolve) {
+                        var c = document.getElementById("fw-msgs");
+                        var div = document.createElement("div");
+                        div.className = "fw-msg";
+                        div.setAttribute("data-role", "assistant");
+                        div.innerHTML = '<div style="font-weight:600;margin-bottom:6px;color:var(--fw-accent);">⚠️ 高危操作，需要确认</div>' +
+                            '<div style="margin-bottom:10px;">' + esc(message) + '</div>' +
+                            '<div style="display:flex;gap:6px;">' +
+                            '<button style="flex:1;padding:7px;background:var(--fw-primary);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:12px;">批准</button>' +
+                            '<button style="flex:1;padding:7px;background:var(--fw-surface-2);border:1px solid var(--fw-border);border-radius:6px;color:var(--fw-text);cursor:pointer;font-size:12px;">拒绝</button>' +
+                            '</div>';
+                        c.appendChild(div);
+                        c.scrollTop = c.scrollHeight;
+                        div.querySelector("button:first-child").onclick = function () { div.innerHTML = '<span style="color:var(--fw-accent);">✅ 已批准，继续执行</span>'; resolve(true); };
+                        div.querySelector("button:last-child").onclick = function () { div.innerHTML = '<span style="color:var(--fw-text-2);">❌ 已拒绝</span>'; resolve(false); };
+                    });
+                }
+                function processLines(lines) {
+                    return (async function () {
                         for (var i = 0; i < lines.length; i++) {
                             var line = lines[i];
                             if (line.indexOf("data: ") !== 0) continue;
@@ -524,9 +538,21 @@
                                 else if (d.tool) { toolLog.push(d.tool); bubble.innerHTML = renderAgent(); }
                                 else if (d.done) { bubble.innerHTML = renderAgent(); }
                                 else if (d.error) { bubble.innerHTML = "❌ " + esc(d.error); }
+                                else if (d.confirm) {
+                                    var approved = await showConfirmBox(d.message);
+                                    fetch(API_BASE + "/api/approve/" + d.confirm_id, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ approved: approved }) });
+                                }
                             } catch (e) {}
                         }
-                        return pump();
+                    })();
+                }
+                function pump() {
+                    return reader.read().then(function (result) {
+                        if (result.done) { finish(); return; }
+                        buffer += decoder.decode(result.value, { stream: true });
+                        var lines = buffer.split("\n");
+                        buffer = lines.pop();
+                        return processLines(lines).then(function () { return pump(); });
                     });
                 }
                 return pump();

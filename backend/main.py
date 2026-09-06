@@ -208,6 +208,20 @@ async def set_note_dir(req: NoteDirUpdate):
     return {"note_dir": _c.NOTE_DIR}
 
 
+class ApproveRequest(BaseModel):
+    approved: bool = False
+
+
+@app.post("/api/approve/{confirm_id}")
+async def approve_action(confirm_id: str, req: ApproveRequest):
+    """高危操作的用户确认：批准或拒绝某个待确认的工具调用"""
+    from backend.services.agent.agent import _resolve_confirmation
+    ok = _resolve_confirmation(confirm_id, req.approved)
+    if not ok:
+        raise HTTPException(404, "确认请求不存在或已过期")
+    return {"status": "approved" if req.approved else "rejected"}
+
+
 @app.get("/api/memory")
 async def list_memory():
     """查看长期记忆（三层结构：类别→子类别→键值对）"""
@@ -747,6 +761,8 @@ async def ask_agent_stream(video_id: str, req: AskRequest):
                     yield f"data: {json.dumps({'token': event['delta']})}\n\n".encode()
                 elif event["type"] == "tool":
                     yield f"data: {json.dumps({'tool': event['name']})}\n\n".encode()
+                elif event["type"] == "confirm":
+                    yield f"data: {json.dumps({'confirm': True, 'confirm_id': event['confirm_id'], 'message': event['message']})}\n\n".encode()
                 elif event["type"] == "done":
                     final_tool_calls = event["tool_calls"]
                 elif event["type"] == "error":

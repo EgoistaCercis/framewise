@@ -36,6 +36,48 @@ def _log_trace(session_id: str, video_id: str, step: int, event_type: str,
         pass
 
 
+# ── 高危操作确认管理（human-in-the-loop）──────────────────
+# 工具执行前请求用户批准：run_stream 推送 confirm 事件并阻塞等待，
+# 前端调 /api/approve 接口唤醒。
+import asyncio
+
+_pending_confirmations: dict = {}  # confirm_id -> {"event": asyncio.Event, "approved": bool, "message": str}
+
+
+def _new_confirmation(message: str) -> str:
+    """创建一条待确认请求，返回 confirm_id"""
+    confirm_id = uuid.uuid4().hex[:12]
+    _pending_confirmations[confirm_id] = {
+        "event": asyncio.Event(),
+        "approved": False,
+        "message": message,
+    }
+    return confirm_id
+
+
+async def _wait_confirmation(confirm_id: str, timeout: float = 120.0) -> bool:
+    """阻塞等待用户确认，返回是否批准（超时默认拒绝）"""
+    entry = _pending_confirmations.get(confirm_id)
+    if not entry:
+        return False
+    try:
+        await asyncio.wait_for(entry["event"].wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        return False
+    return entry["approved"]
+
+
+def _resolve_confirmation(confirm_id: str, approved: bool) -> bool:
+    """由 /api/approve 调用，设置确认结果并唤醒等待"""
+    entry = _pending_confirmations.get(confirm_id)
+    if not entry:
+        return False
+    entry["approved"] = approved
+    entry["event"].set()
+    _pending_confirmations.pop(confirm_id, None)
+    return True
+
+
 def _load_memory_context() -> str:
     """加载长期记忆（默认全量）。作为独立消息注入 messages 列表，避免污染 system prompt 缓存。"""
     try:
@@ -187,7 +229,21 @@ class Agent:
                            json.dumps({"name": tc["name"], "arguments": tc["arguments"]}, ensure_ascii=False),
                            tool_name=tc["name"])
                 yield {"type": "tool", "name": tc["name"]}
-                result = await self._execute_tool(tc, context)
+
+                # 高危操作（覆盖文件、删除文件等）需用户确认
+                tool = get_tool(tc["name"])
+                arguments = json.loads(tc["arguments"]) if tc["arguments"] else {}
+                if tool is not None and tool.requires_confirmation(**arguments):
+                    message = tool.confirm_message(**arguments)
+                    confirm_id = _new_confirmation(message)
+                    yield {"type": "confirm", "confirm_id": confirm_id, "tool": tc["name"], "message": message}
+                    if await _wait_confirmation(confirm_id):
+                        result = await self._execute_tool(tc, context)
+                    else:
+                        result = f"用户拒绝了该操作：{tc['name']}"
+                else:
+                    result = await self._execute_tool(tc, context)
+
                 result = await self._compress_tool_result(user_message, tc["name"], result)
                 _log_trace(session_id, video_id, step, "tool_result", result, tool_name=tc["name"])
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
