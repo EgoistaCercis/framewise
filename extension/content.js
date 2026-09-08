@@ -451,7 +451,24 @@
     function addMsg(type, content) { var c = document.getElementById("fw-msgs"), div = document.createElement("div"); div.className = "fw-msg"; div.setAttribute("data-role", type); div.innerHTML = content; c.appendChild(div); c.scrollTop = c.scrollHeight; return div; }
 
     // ── 定时任务 ──
-    setInterval(function () { if (!window._fwReady) return; var t = getCurrentTime(); document.getElementById("fw-time").textContent = fmt(t); var paused = (document.querySelector("video") || {}).paused; var lbl = document.getElementById("fw-mode-lbl"); if (lbl) { lbl.textContent = paused ? "画面" : "文本"; lbl.style.color = paused ? "var(--fw-accent)" : "var(--fw-text-3)"; } }, 1000);
+    var wasPaused = false;
+    setInterval(function () {
+        if (!window._fwReady) return;
+        var t = getCurrentTime();
+        document.getElementById("fw-time").textContent = fmt(t);
+        var paused = (document.querySelector("video") || {}).paused;
+        var lbl = document.getElementById("fw-mode-lbl");
+        if (lbl) {
+            lbl.textContent = paused ? "🖼️ 画面" : "📝 文本";
+            lbl.style.color = paused ? "var(--fw-accent)" : "var(--fw-text-3)";
+            lbl.title = paused ? "如果要分析画面内容，请将视频暂停到该画面，并明确告诉助手分析该画面的内容" : "";
+        }
+        // 首次暂停（进入画面模式）时提示用户
+        if (paused && !wasPaused) {
+            addMsg("system", "🖼️ 画面模式：可询问当前画面内容。若要分析某个画面，请先暂停到该画面，再明确告诉助手分析该画面");
+        }
+        wasPaused = paused;
+    }, 1000);
     setInterval(function () { var cur = cleanUrl(location.href); if (cur !== lastUrl) { lastUrl = cur; if (autoMode) { videoId = null; window._fwReady = false; updateStatus("⏳ 新视频..."); document.getElementById("fw-input").disabled = true; document.getElementById("fw-send").disabled = true; document.getElementById("fw-msgs").innerHTML = ""; initVideo(); } else { addMsg("system", "🔔 检测到新视频，点击顶栏 🔄 手动处理"); } } }, 2000);
     var isOffline = false; setInterval(function () { fetch(API_BASE + "/api/health").then(function () { if (isOffline) { isOffline = false; updateStatus("✅ 已重连"); } }).catch(function () { if (!isOffline) { isOffline = true; updateStatus("⚠️ 断线"); } }); }, 10000);
 
