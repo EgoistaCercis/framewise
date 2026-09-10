@@ -1,0 +1,810 @@
+{
+  "meta": {
+    "source": "项目评测视频领域20260908.md",
+    "videos": 8,
+    "questions": 80,
+    "type_distribution": {
+      "single_hop": 16,
+      "multi_hop": 16,
+      "visual_only": 16,
+      "joint": 16,
+      "unanswerable": 16
+    },
+    "subtitle_source": "asr",
+    "note": "字幕由 ASR 生成，与评测集 evidence 引用的官方字幕存在差异，会影响检索指标"
+  },
+  "videos": [
+    {
+      "video_id": "b8739307cc61",
+      "bv": "BV1EY6FBwE8P",
+      "page": "192",
+      "name": "李沐transformer",
+      "url": "https://www.bilibili.com/video/BV1EY6FBwE8P/?spm_id_from=333.788.videopod.episodes&vd_source=df8a6b0f97f3766477ffa90a3c5b2635&p=192",
+      "cases": [
+        {
+          "id": "b8739307cc61_q1",
+          "type": "single_hop",
+          "question": "Transformer跟使用注意力的seq2seq模型最大的区别是什么？",
+          "reference_answer": "Transformer是纯基于注意力的架构，而不像seq2seq那样只是在使用注意力的基础上还依赖循环层。",
+          "evidence": "跟使用注意力的seq2seq不同，Transformer是纯基于注意力",
+          "time_start": 91,
+          "time_end": 239
+        },
+        {
+          "id": "b8739307cc61_q2",
+          "type": "single_hop",
+          "question": "为什么批量归一化不适合序列长度会变化的NLP应用？",
+          "reference_answer": "因为批量归一化是对每个特征/通道里的元素进行归一化，当序列长度变化时统计量不稳定，所以不适合序列长度会变的NLP应用。",
+          "evidence": "批量归一化对每个特征/通道里元素进行归一化；不适合序列长度会变的NLP应用",
+          "time_start": 715,
+          "time_end": 964
+        },
+        {
+          "id": "b8739307cc61_q3",
+          "type": "multi_hop",
+          "question": "解码器中为什么要用掩码多头注意力？预测第t+1个输出时解码器是如何利用前t个预测值的？",
+          "reference_answer": "因为解码器输出某个元素时不应考虑该元素之后的元素，所以用掩码实现（计算x_i时假装当前序列长度为i）。在预测第t+1个输出时，解码器输入前t个预测值，在自注意力中前t个预测值作为key和value，第t个预测值还作为query，从而保证只看到当前位置及之前的信息。",
+          "evidence": "解码器对序列中一个元素输出时，不应该考虑该元素之后的元素；可以通过掩码来实现，也就是计算x_i输出时，假装当前序列长度为i ＋ 预测第t+1个输出时，解码器中输入前t个预测值；在自注意力中，前t个预测值作为key和value，第t个预测值还作为query",
+          "time_start": 512,
+          "time_end": 1178
+        },
+        {
+          "id": "b8739307cc61_q4",
+          "type": "multi_hop",
+          "question": "既然Transformer完全没有循环层，它是如何让模型知道序列中元素的顺序信息的？同时编码器输出又是怎样传给解码器的？",
+          "reference_answer": "顺序信息靠位置编码：在嵌入（Embedding）之后加上位置编码（Positional encoding）再输入编码器/解码器。编码器与解码器之间的信息传递则是把编码器输出y_1,...,y_n作为解码器中第i个Transformer块中多头注意力的key和value（query来自目标序列），这也意味着编码器和解码器中块的个数和输出维度必须一样。",
+          "evidence": "位置编码（幻灯片标注及架构图中的Positional encoding加到Embedding上） ＋ 编码器中的输出y_1,...,y_n；将其作为解码中第i个Transformer块中多头注意力的key和value；它的query来自目标序列；意味着编码器和解码器中块的个数和输出维度都是一样的",
+          "time_start": 91,
+          "time_end": 1801
+        },
+        {
+          "id": "b8739307cc61_q5",
+          "type": "visual_only",
+          "question": "视频开头幻灯片左侧展示的电影海报是哪部电影？",
+          "reference_answer": "《变形金刚：月黑之时》（Transformers: Dark of the Moon），海报上是角色大黄蜂。",
+          "evidence": "画面左侧为电影海报，底部有\"TRANSFORMERS DARK OF THE MOON\"字样，主体为黄色机器人（大黄蜂）；全程字幕/口播幻灯片中未提及该电影名称",
+          "time_start": 0,
+          "time_end": 90
+        },
+        {
+          "id": "b8739307cc61_q6",
+          "type": "visual_only",
+          "question": "在讲\"层归一化\"的幻灯片里，Batch Norm和Layer Norm两个立方体示意图中，被涂成蓝色的切片分别沿哪个轴？",
+          "reference_answer": "Batch Norm立方体中高亮（蓝色）的是固定某个特征/通道、跨batch和len的切片（沿b轴方向的一个面，即对每个特征/通道归一化）；Layer Norm立方体中高亮的是固定某个batch样本、跨len和d的切片（沿b轴最前面的一层，即对每个样本里的元素归一化）。直观上：Batch Norm蓝色面朝向b轴一侧的整面，Layer Norm蓝色面是b轴上单独一片。",
+          "evidence": "画面中\"层归一化\"幻灯片中部有两个标注为Batch Norm与Layer Norm的三维立方体（轴标为len、d、b）：Batch Norm的蓝色区域为沿len×b方向的一整片特征面，Layer Norm的蓝色区域为b轴上单独一个样本的len×d切片；该对比仅以图形呈现，字幕文字只说明归一化对象，未描述蓝色切片方向",
+          "time_start": 715,
+          "time_end": 964
+        },
+        {
+          "id": "b8739307cc61_q7",
+          "type": "joint",
+          "question": "幻灯片上说多头注意力使用h个独立的注意力池化，画面中的多头注意力结构图里Query、Key、Value先经过什么组件再进入各个Attention块？",
+          "reference_answer": "先经过各自的全连接层（FC）做线性投影，再分别送入h个独立的Attention块；各头输出经Concat合并后再通过一个FC得到最终输出。这与字幕\"多头注意力使用h个独立的注意力池化、合并各个头（head）输出得到最终输出\"相对应。",
+          "evidence": "字幕：多头注意力使用h个独立的注意力池化；合并各个头（head）输出得到最终输出 ＋ 画面：Queries/Keys/Values分别指向多个FC框，FC框再指向两个（多个）Attention块，Attention输出汇入Concat，Concat再接一个FC",
+          "time_start": 240,
+          "time_end": 420
+        },
+        {
+          "id": "b8739307cc61_q8",
+          "type": "joint",
+          "question": "讲\"基于位置的前馈网络\"时，幻灯片文字说它等价于两层核窗口为1的一维卷积层，那么右侧Transformer架构图里被橙色框高亮的是哪个模块？",
+          "reference_answer": "被橙色框高亮的是编码器（和解码器）Transformer块中的\"Positionwise FFN\"（基于位置的前馈网络）模块，即字幕所讲的将(b,n,d)变换成(bn,d)、作用两个全连接层再变回(b,n,d)的组件。",
+          "evidence": "字幕：将输入形状由(b,n,d)变换成(bn,d)；作用两个全连接层；输出形状由(bn,d)变化回(b,n,d)；等价于两层核窗口为1的一维卷积层 ＋ 画面：右上角Transformer架构图中橙色矩形框圈住Encoder与Decoder虚线块内的\"Positionwise FFN\"蓝色模块",
+          "time_start": 593,
+          "time_end": 714
+        },
+        {
+          "id": "b8739307cc61_q9",
+          "type": "unanswerable",
+          "question": "视频中讲师有没有比较Transformer和BERT在GLUE基准上的得分？",
+          "reference_answer": "没有。视频只讲了Transformer的架构组件（多头注意力、掩码注意力、前馈网络、层归一化、信息传递与预测），完全没有提及BERT或GLUE基准的任何实验得分。",
+          "evidence": "",
+          "time_start": 0,
+          "time_end": 1262
+        },
+        {
+          "id": "b8739307cc61_q10",
+          "type": "unanswerable",
+          "question": "讲师在本节视频中是否给出了Transformer在WMT机器翻译任务上的BLEU分数？",
+          "reference_answer": "没有给出。整个视频只介绍Transformer的结构与原理，未报告任何机器翻译数据集（如WMT）上的BLEU实验结果。",
+          "evidence": "",
+          "time_start": 0,
+          "time_end": 1262
+        }
+      ]
+    },
+    {
+      "video_id": "a16bdbbe10cf",
+      "bv": "BV1EY6FBwE8P",
+      "page": "181",
+      "name": "李沐注意力机制",
+      "url": "https://www.bilibili.com/video/BV1EY6FBwE8P/?spm_id_from=333.788.videopod.episodes&vd_source=df8a6b0f97f3766477ffa90a3c5b2635&p=181",
+      "cases": [
+        {
+          "id": "a16bdbbe10cf_q1",
+          "type": "single_hop",
+          "question": "心理学框架里认为人类是根据什么来选择注意点的？",
+          "reference_answer": "人类根据随意线索和不随意线索来选择注意点。",
+          "evidence": "心理学框架： 人类根据随意线索和不随意线索选择注意点",
+          "time_start": 5,
+          "time_end": 118
+        },
+        {
+          "id": "a16bdbbe10cf_q2",
+          "type": "single_hop",
+          "question": "在注意力机制中，随意线索被称为什么？",
+          "reference_answer": "随意线索被称之为查询（query）。",
+          "evidence": "随意线索被称之为查询（query）",
+          "time_start": 119,
+          "time_end": 497
+        },
+        {
+          "id": "a16bdbbe10cf_q3",
+          "type": "multi_hop",
+          "question": "为什么卷积、全连接、池化层和注意力机制不一样？注意力机制又是靠什么来有偏向性地选择输入的？",
+          "reference_answer": "因为卷积、全连接、池化层都只考虑不随意线索，而注意力机制则显式地考虑随意线索（即查询query）；每个输入是一个值（value）和不随意线索（key）的对，通过注意力池化层来有偏向性地选择某些输入。",
+          "evidence": "卷积、全连接、池化层都只考虑不随意线索 ＋ 注意力机制则显示的考虑随意线索；每个输入是一个值（value）和不随意线索（key）的对；通过注意力池化层来有偏向性的选择选择某些输入",
+          "time_start": 119,
+          "time_end": 497
+        },
+        {
+          "id": "a16bdbbe10cf_q4",
+          "type": "multi_hop",
+          "question": "非参注意力池化层里最简单的方案是什么？视频最后给出的注意力机制的一般形式又是什么？",
+          "reference_answer": "最简单的方案是平均池化 f(x)=1/n·Σ_i y_i；总结页给出注意力机制的一般形式为 f(x)=Σ_i α(x, x_i) y_i，其中 α(x, x_i) 是注意力权重。",
+          "evidence": "平均池化是最简单的方案：f(x) = 1/n Σ_i y_i ＋ 可以一般的写作f(x) = Σ_i α(x, x_i)y_i，这里α(x, x_i) 是注意力权重",
+          "time_start": 498,
+          "time_end": 836
+        },
+        {
+          "id": "a16bdbbe10cf_q5",
+          "type": "visual_only",
+          "question": "视频开头标题页的背景图是什么图案？",
+          "reference_answer": "是一个大脑的插画：左半球是黑白线条并写满数学公式，右半球涂满彩色（绿、黄、红、蓝等）颜料泼溅效果，标题\"注意力机制\"以橙色底框叠在大脑上方。",
+          "evidence": "画面：0-5秒标题页背景为一幅大脑插图，左半脑为线稿加公式涂鸦，右半脑为彩色泼墨填充，橙色矩形标题框写着\"注意力机制\"；该图案信息仅存在于画面中，字幕/幻灯片文字未描述",
+          "time_start": 0,
+          "time_end": 5
+        },
+        {
+          "id": "a16bdbbe10cf_q6",
+          "type": "visual_only",
+          "question": "在\"心理学\"那页幻灯片的眼球示意图中，被红色光晕高亮、并由红线从眼球Fovea引出的物体有哪些？",
+          "reference_answer": "左图中是竖排物体列里的红色杯子被红色光晕高亮并有红线连接眼球；右图中则是同一列物体里最下方的那本书被红色光晕高亮并有红线连接眼球（红色杯子在右图中不再被高亮）。",
+          "evidence": "画面：心理学幻灯片含两组眼球（标有Fovea、Macula）与竖排物体（报纸、书、红色杯子、书、打开的书）示意图；左图红线指向带红色光晕的红色杯子，右图红线指向带红色光晕的最下方一本书；物体种类与高亮位置仅由画面呈现",
+          "time_start": 5,
+          "time_end": 118
+        },
+        {
+          "id": "a16bdbbe10cf_q7",
+          "type": "joint",
+          "question": "在\"注意力机制\"幻灯片右侧的示意图里，被红色光晕圈住的那个Value对应的输入是如何最终变成Output的？结合字幕说明这个选择过程由什么驱动？",
+          "reference_answer": "画面中Keys（Nonvolitional cues）与Query（Volitional cue）一起进入Attention pooling框，池化层用虚线指向被红色光晕高亮的那个Value，该Value再经箭头送向Output；结合字幕可知这是通过注意力池化层、由随意线索（query）与不随意线索（key）的匹配来有偏向性地选择某些输入，即输出是被选中的value。",
+          "evidence": "字幕：随意线索被称之为查询（query）；每个输入是一个值（value）和不随意线索（key）的对；通过注意力池化层来有偏向性的选择选择某些输入 ＋ 画面：右侧示意图中Query框与Keys列输入到Attention pooling，虚线指向Values列中被红色光晕高亮的方块，该方块箭头连到Output",
+          "time_start": 119,
+          "time_end": 497
+        },
+        {
+          "id": "a16bdbbe10cf_q8",
+          "type": "joint",
+          "question": "在\"非参注意力池化层\"幻灯片的公式标注中，橙色气泡框把Nadaraya-Watson核回归公式里的哪些部分分别标成了query、key和value？",
+          "reference_answer": "橙色气泡框标注：f(x)中的查询x（公式左侧的x）标为query；分母/分子核函数中的x_i（即K(x−x_i)中的键）标为key；被加权求和的y_i标为value。这与字幕中\"每个输入是一个值（value）和不随意线索（key）的对、随意线索为查询（query）\"的定义对应。",
+          "evidence": "字幕：随意线索被称之为查询（query）；每个输入是一个值（value）和不随意线索（key）的对 ＋ 画面：非参注意力池化层幻灯片中公式 f(x)=Σ_i K(x−x_i)/Σ_j K(x−x_j) · y_i 旁有三个橙色气泡框，分别指向f(x)的x（query）、K(x−x_i)中的x_i（key）、以及y_i（value）",
+          "time_start": 498,
+          "time_end": 925
+        },
+        {
+          "id": "a16bdbbe10cf_q9",
+          "type": "unanswerable",
+          "question": "视频里有没有讲Transformer中的多头注意力是如何做掩码的？",
+          "reference_answer": "没有。本视频只讲注意力机制的心理学动机、query/key/value框架、非参注意力池化层、Nadaraya-Watson核回归和参数化注意力，完全没有涉及Transformer或掩码（mask）的内容。",
+          "evidence": "",
+          "time_start": 0,
+          "time_end": 836
+        },
+        {
+          "id": "a16bdbbe10cf_q10",
+          "type": "unanswerable",
+          "question": "讲师在这个视频中是否给出了注意力机制在机器翻译数据集上的BLEU实验结果？",
+          "reference_answer": "没有给出。视频全程只介绍注意力机制的概念与数学形式（平均池化、Nadaraya-Watson核回归、参数化注意力），未报告任何机器翻译实验或BLEU分数。",
+          "evidence": "",
+          "time_start": 0,
+          "time_end": 836
+        }
+      ]
+    },
+    {
+      "video_id": "8f5733550739",
+      "bv": "BV1fm421j7SQ",
+      "page": "",
+      "name": "LayerNorm和BatchNorm的区别",
+      "url": "https://www.bilibili.com/video/BV1fm421j7SQ/?spm_id_from=333.337.search-card.all.click&vd_source=df8a6b0f97f3766477ffa90a3c5b2635",
+      "cases": [
+        {
+          "id": "8f5733550739_q1",
+          "type": "single_hop",
+          "question": "BatchNorm是基于什么范围的数据来计算均值和方差进行规范化的？",
+          "reference_answer": "通过对每个特征在小批量数据（batch）上计算的均值和方差来进行规范化。",
+          "evidence": "BatchNorm是通过对每个特征在小批量数据（batch）上计算的均值和方差来进行规范化。",
+          "time_start": 0,
+          "time_end": 30
+        },
+        {
+          "id": "8f5733550739_q2",
+          "type": "single_hop",
+          "question": "LayerNorm通常用于处理哪类数据，哪些典型模型会用到它？",
+          "reference_answer": "LayerNorm通常用于处理序列数据，如RNN或Transformer模型。",
+          "evidence": "LayerNorm则是对单个数据样本的所有特征进行规范化，通常用于处理序列数据，如RNN或Transformer模型。",
+          "time_start": 0,
+          "time_end": 30
+        },
+        {
+          "id": "8f5733550739_q3",
+          "type": "multi_hop",
+          "question": "在BatchNorm1D的示例中，输入张量的形状是(2,3,5)，代码注释里说明这三个维度分别代表什么？对应的文字总结又是什么？",
+          "reference_answer": "代码注释说明一共2句话(batch)、每句话5个字(length)、每个字3个特征(channel)；幻灯片文字总结为\"2句话，3个特征，5个字\"，维度顺序对应Batch_Size, Channel, Length（N即B,C,L）。",
+          "evidence": "代码注释：# 定义B (batch, chenal, length): [2,3,5] 一共2句话(batch)，每句话5个字（length），每个字3个特征(chnael)；幻灯片文字：2句话，3个特征，5个字 / Batch_Size,Chenal,Length / N即B,C,L",
+          "time_start": 110,
+          "time_end": 200
+        },
+        {
+          "id": "8f5733550739_q4",
+          "type": "multi_hop",
+          "question": "BatchNorm1D示例中第一个句子\"我爱吃苹果\"对应的特征列里，被红框标出的数值1，经过归一化后变成了多少？这个归一化所用的均值和方差又是多少？",
+          "reference_answer": "归一化后变为-0.3708（输出矩阵第一个元素）；所用均值为1.9、方差为5.89（计算式(1-1.9)/sqrt(5.89+1e-5)=-0.3708）。",
+          "evidence": "幻灯片：均值为1.9、方差为5.89，计算：(1-1.9)/sqrt(5.89+1e-5)=-0.3708；归一化结果矩阵首元素为[[-0.3708, -0.7829, 0.0412, -0.7829, -0.7829], ...]",
+          "time_start": 96,
+          "time_end": 110
+        },
+        {
+          "id": "8f5733550739_q5",
+          "type": "visual_only",
+          "question": "幻灯片右侧绿色3×5表格中，被黑色括号框住的是哪几行？",
+          "reference_answer": "黑色括号框住的是第一行（0 1 1 0 0）和第三行（1 1 1 1 1），即对应每个特征（channel）的行，表示Batch内对每个特征进行优化。",
+          "evidence": "画面中右侧绿色表格（值为0/1的3行5列矩阵）上方和下方各有一条黑色括号线条，分别框住第一行和第三行；字幕文字中未描述括号位置。",
+          "time_start": 0,
+          "time_end": 60
+        },
+        {
+          "id": "8f5733550739_q6",
+          "type": "visual_only",
+          "question": "在演示BatchNorm1D的幻灯片下方，展示的两张像素示意图分别标着什么标题？各自左上角的红色方块里写的数字是几？",
+          "reference_answer": "两张图分别标为\"Image 1\"和\"Image 2\"，各自左上角红色方块中的数字都是1。",
+          "evidence": "画面下方并排两张由蓝灰色块组成的像素矩阵图，图上方分别有灰色小字标题\"Image 1\"和\"Image 2\"，两图左上角均为红色填充方块、内写白色数字1；这些信息仅出现在画面中。",
+          "time_start": 96,
+          "time_end": 110
+        },
+        {
+          "id": "8f5733550739_q7",
+          "type": "joint",
+          "question": "幻灯片上说BatchNorm在\"小批量数据（batch）\"上计算均值方差，那么在代码演示中，这个batch维度具体对应示例里的什么对象、大小是多少？",
+          "reference_answer": "batch维度对应\"句子\"，示例中batch大小为2，即两句话（\"我爱吃苹果\"和\"她爱吃吗？\"），对应np.array最外层包含的两个子矩阵。",
+          "evidence": "字幕：BatchNorm是通过对每个特征在小批量数据（batch）上计算的均值和方差来进行规范化；画面/代码：sentences = np.array([[[1,0,2,0,0],...],[[1,0,2,7,6],...]]) 共2句话(batch)，幻灯片表格将两个句子矩阵并排标注为C维与L维。",
+          "time_start": 110,
+          "time_end": 120
+        },
+        {
+          "id": "8f5733550739_q8",
+          "type": "joint",
+          "question": "公式页中BN(x_i)的归一化公式里，分母中的epsilon在文字说明中被称为什么、起什么作用？在后面的代码里它被赋成了什么值？",
+          "reference_answer": "epsilon是一个很小的数，用于避免除零；代码中赋值为epsilon = 1e-5。",
+          "evidence": "字幕：（epsilon )是一个很小的数以避免除零；画面代码（batchnorm.py / layernorm.py）：epsilon = 1e-5，并用于 normalized_sentences = (sentences - mean) / np.sqrt(variance + epsilon)。",
+          "time_start": 0,
+          "time_end": 30
+        },
+        {
+          "id": "8f5733550739_q9",
+          "type": "unanswerable",
+          "question": "视频中是否比较了LayerNorm和GroupNorm在训练速度上的差异？",
+          "reference_answer": "视频没有涉及GroupNorm，也没有比较LayerNorm与GroupNorm的训练速度，无法回答。",
+          "evidence": "",
+          "time_start": -1,
+          "time_end": -1
+        },
+        {
+          "id": "8f5733550739_q10",
+          "type": "unanswerable",
+          "question": "讲者在代码演示中使用的Python版本是多少？",
+          "reference_answer": "视频画面和字幕均未提及Python版本号，无法回答。",
+          "evidence": "",
+          "time_start": -1,
+          "time_end": -1
+        }
+      ]
+    },
+    {
+      "video_id": "3362144c2032",
+      "bv": "BV1Rd4y1c7Bq",
+      "page": "",
+      "name": "卡尔n皇后",
+      "url": "https://www.bilibili.com/video/BV1Rd4y1c7Bq/?spm_id_from=333.337.search-card.all.click&vd_source=df8a6b0f97f3766477ffa90a3c5b2635",
+      "cases": [
+        {
+          "id": "3362144c2032_q1",
+          "type": "single_hop",
+          "question": "N皇后问题中，放置皇后需要满足哪些条件？",
+          "reference_answer": "同一行里不能出现两个皇后，同一列里也不能出现两个皇后，并且45度角（对角线）方向也不能出现两个皇后。",
+          "evidence": "同一行里不能出现两个皇后；同一列里也不能出现两个皇后；然后45度45度角也不能出现两个皇后",
+          "time_start": 23,
+          "time_end": 32
+        },
+        {
+          "id": "3362144c2032_q2",
+          "type": "single_hop",
+          "question": "讲者说如果不用递归、直接暴力枚举4*4棋盘的所有皇后位置，需要嵌套几层for循环？那如果是6*6的棋盘呢？",
+          "reference_answer": "4*4棋盘需要嵌套四个for循环（每行一层）；按同样逻辑6*6棋盘就需要嵌套六层for循环，讲者指出此时for循环已经嵌套不下去了。",
+          "evidence": "如果这是一个4*4的一个棋盘的话，我们是不是要嵌套四个for循环呢……里边再嵌套个for循环遍历第4行；6*6呢7*7呢，你就会发现你的for循环嵌套不下去了",
+          "time_start": 115,
+          "time_end": 149
+        },
+        {
+          "id": "3362144c2032_q3",
+          "type": "multi_hop",
+          "question": "讲者提到回溯算法本质也是暴力搜索，那它相比直接嵌套for循环的优势在哪里？递归层数和棋盘规模是什么关系？",
+          "reference_answer": "回溯算法与嵌套for循环的时间复杂度是一样的，其优势在于用递归的方式控制嵌套for循环的层数：4*4棋盘递归4层、5*5递归5层、n*n棋盘递归n层，每层递归里只有一个for循环遍历该行的每个位置，从而避免了写不死层数的嵌套循环。",
+          "evidence": "首先回溯算法它也是暴力搜索……其实时间复杂度是一样的；但是回溯算法呢，就是帮我们用递归的方式，去控制我们嵌套for循环的层；如果这是一个4*4的我们就递归4层；如果你是5*5呢我们就递归5层；n*n我们就递归n层；每一层递归里面有一个for循环",
+          "time_start": 157,
+          "time_end": 190
+        },
+        {
+          "id": "3362144c2032_q4",
+          "type": "multi_hop",
+          "question": "为什么递归函数backtracking需要传入一个row参数？终止条件又是什么？",
+          "reference_answer": "因为每一层递归处理棋盘的不同行，需要row记录当前遍历到第几行（第一层递归取第1行、第二层取第2行……）；终止条件是row等于n，即遍历到第n行（叶子节点），此时把当前棋盘放入结果集并return。",
+          "evidence": "然后呢我们还要传入一个row……我们每1层递归是不是第一层递归是不是第一行、第2层递归是不是第二行；是不是通过row来记录一下呀；也就是说当我们的row等于等于什么呀……if(row==n)；此时的棋盘放进我们的结果集里，然后呢return",
+          "time_start": 419,
+          "time_end": 494
+        },
+        {
+          "id": "3362144c2032_q5",
+          "type": "visual_only",
+          "question": "白板右上角画了两个示例棋盘，每个棋盘里放了几枚皇后（几个Q）？",
+          "reference_answer": "每个4*4棋盘中各放了4枚皇后（4个Q），即右上角两个示例解各自包含4个Q。",
+          "evidence": "画面右上角并排画着两个4*4网格棋盘，每个棋盘的格子中手写有4个字母Q（分布在不同行不同列），用作N皇后合法摆放的示例；字幕中并未说明Q的数量。",
+          "time_start": 14,
+          "time_end": 20
+        },
+        {
+          "id": "3362144c2032_q6",
+          "type": "visual_only",
+          "question": "白板中间那棵搜索树里，被讲者用笔画了一个椭圆圈起来的节点，是第几层的哪个棋盘？",
+          "reference_answer": "被椭圆圈出的是搜索树第三层（标有\"取3\"分支下）的那个棋盘节点，即第一行Q在第3列、第二行Q在第1列（格子中写有Q和叉号标记）的那个3*3棋盘。",
+          "evidence": "画面中树形结构第三层中间偏右的一个棋盘节点（格子里第一行第三列写Q、第二行第一列写Q）被讲者用黑色马克笔画了一个椭圆形圈住；该信息仅存在于画面板书中。",
+          "time_start": 686,
+          "time_end": 700
+        },
+        {
+          "id": "3362144c2032_q7",
+          "type": "joint",
+          "question": "讲者在代码实现部分写到if(isValid(...))来判断位置合法性，这个isValid函数具体要检查哪几项内容？",
+          "reference_answer": "isValid用于判断在第row行第i列放皇后是否合法，需要检查三项：行里有没有重复出现皇后、列里有没有重复出现皇后、45度角（对角线）有没有重复出现皇后。",
+          "evidence": "字幕：if isValid……我们去判断这个位置是否合法；行里边有没有重复出现皇后；列里边有没有重复出现皇后；45度角有没有重复出现皇后；画面：白板上写出 if(isValid(row, i, chessboard, n)) 并指向树形节点说明判断对象。",
+          "time_start": 597,
+          "time_end": 636
+        },
+        {
+          "id": "3362144c2032_q8",
+          "type": "joint",
+          "question": "讲者说递归到叶子节点时收获结果，但有人质疑\"到叶子节点不一定是合法的\"，讲者如何解释？结合白板上的树形图说明。",
+          "reference_answer": "讲者解释：在进入下一层递归之前就会对当前位置做合法性判断（isValid），不合法的分支直接不再往下递归（白板树上这些分支被打叉），所以能走到叶子节点（row==n）的棋盘一定是合法的，可以直接放入结果集。",
+          "evidence": "字幕：你到叶子节点它不一定是合法的呀……会对合法性进行一个判断……我们直接就不会再往下去递归了；所以说这种情况压根它就不会走到；所以说如果它走到叶子节点了，那就一定是合法的一个棋盘；画面：树形结构中多个子节点分支上画有叉号（×），表示不合法被剪掉。",
+          "time_start": 496,
+          "time_end": 522
+        },
+        {
+          "id": "3362144c2032_q9",
+          "type": "unanswerable",
+          "question": "视频中讲者是否给出了isValid函数的完整代码实现？",
+          "reference_answer": "没有。讲者明确表示isValid这个函数在白板上不写了，让大家去代码随想录网站上看文字讲解版中的实现，因此视频中并未给出其完整代码。",
+          "evidence": "",
+          "time_start": -1,
+          "time_end": -1
+        },
+        {
+          "id": "3362144c2032_q10",
+          "type": "unanswerable",
+          "question": "讲者在视频里有没有分析N皇后问题的时间复杂度和空间复杂度具体是多少？",
+          "reference_answer": "没有。视频只提到回溯与嵌套for循环时间复杂度一样、以及递归层数等，并未给出具体的时间/空间复杂度公式或数值分析。",
+          "evidence": "",
+          "time_start": -1,
+          "time_end": -1
+        }
+      ]
+    },
+    {
+      "video_id": "d7c8a5aa25af",
+      "bv": "BV1if4y1d7ob",
+      "page": "",
+      "name": "卡尔环形链表",
+      "url": "https://www.bilibili.com/video/BV1if4y1d7ob/?spm_id_from=333.337.search-card.all.click&vd_source=df8a6b0f97f3766477ffa90a3c5b2635",
+      "cases": [
+        {
+          "id": "d7c8a5aa25af_q1",
+          "type": "single_hop",
+          "question": "环形链表这道题其实包含哪两问？",
+          "reference_answer": "第一问是判断链表是否有环，第二问是找到这个环的入口。",
+          "evidence": "那这道环形链表的题目其实有两问，一问是判断这个链表是否有环；第二问是啊，找到这个环的入口",
+          "time_start": 12,
+          "time_end": 23
+        },
+        {
+          "id": "d7c8a5aa25af_q2",
+          "type": "single_hop",
+          "question": "判断链表是否有环时，快指针和慢指针每次各走几个节点？",
+          "reference_answer": "快指针每次走两个节点，慢指针每次走一个节点。",
+          "evidence": "快指针是每次走两个节点；慢指针每次走一个节点",
+          "time_start": 168,
+          "time_end": 175
+        },
+        {
+          "id": "d7c8a5aa25af_q3",
+          "type": "multi_hop",
+          "question": "为什么快慢指针相遇后，再让一个指针从head出发、与相遇点指针同速移动，最终相遇处就是环的入口？请结合白板上的公式推导说明。",
+          "reference_answer": "由slow=x+y、fast=x+y+n(y+z)且fast=2*slow，可推出x+y=n(y+z)，进而x=(n-1)(y+z)+z；当n=1时x=z，即从head出发的指针走x距离、从相遇点出发的指针走z距离（绕环整数圈后等价），两者会在环入口处相遇。",
+          "evidence": "slow = x+y；fast = x+y+n(y+z)；2(x+y)=x+y+n(y+z)；x+y=n(y+z)；x=n(y+z)-y；x=(n-1)(y+z)+z；x=z；n等于一的时候……这个距离等于这个距离……最后他俩相遇的点就是啊这个环的入口处",
+          "time_start": 355,
+          "time_end": 740
+        },
+        {
+          "id": "d7c8a5aa25af_q4",
+          "type": "multi_hop",
+          "question": "讲者为什么强调快指针必须每次走两步、而不是走三步或更多步？这与\"快指针相对慢指针的速度\"有什么关系？",
+          "reference_answer": "快指针每次走两步、慢指针每次走一步时，快指针相对于慢指针每次只接近一个节点，因此在环里一定能追上慢指针而不会跳过它；若快指针一次走三个节点，相对速度为每次两个节点，就可能正好跳过慢指针而永远错过。",
+          "evidence": "快指针每次走两步，慢指针每次走一步，那么快指针相对于慢指针移动来说，是不是每次就移动一个节点……所以说他俩一定会相遇，而不会让快指针直接跳过它；如果你这个快指针你是一起走三个节点的话，那样可能就把这个慢指针给跳过去了",
+          "time_start": 228,
+          "time_end": 262
+        },
+        {
+          "id": "d7c8a5aa25af_q5",
+          "type": "visual_only",
+          "question": "视频开头讲者身后白板左侧的架子上放着一个什么玩偶？",
+          "reference_answer": "一个黑白配色、带黄色嘴部的企鹅造型玩偶（类似QQ企鹅的抱枕/公仔）。",
+          "evidence": "画面中白板左下方的红色垫子/架子上一直放着一个黑白相间、有黄色喙的企鹅造型毛绒玩偶；全程字幕未提及该物品。",
+          "time_start": 0,
+          "time_end": 30
+        },
+        {
+          "id": "d7c8a5aa25af_q6",
+          "type": "visual_only",
+          "question": "讲者在白板右上部画的链表示意图中，用来表示\"环\"的图形是什么形状？直线段和它的连接方式是怎样的？",
+          "reference_answer": "用一条水平直线段表示链表的无环部分，直线右端连接一个手绘的圆圈（闭环），表示链表尾部绕回形成环； later 还在圆上标注了x、y、z等距离箭头。",
+          "evidence": "画面中讲者先画一条水平直线，再在直线右端画一个闭合圆圈与之相接，构成\"带环链表\"示意图；随后在圆环上画出y、z弧段箭头、在直线上标x；这些图形细节仅存在于画面板书中。",
+          "time_start": 35,
+          "time_end": 45
+        },
+        {
+          "id": "d7c8a5aa25af_q7",
+          "type": "joint",
+          "question": "讲者说\"如果快慢指针相遇了，说明链表有环\"，那么反过来，如果链表没有环，快慢指针会是什么表现？结合他画的直线图解释。",
+          "reference_answer": "如果链表没有环（白板上一条直线的情形），快指针一直走在前面并先到达链表末尾（null），快慢指针绝对不可能相遇；因此只有相遇才能判定有环。",
+          "evidence": "字幕：如果这个链表它没有环，它是一条直线的话……那么快慢指针有可能相遇吗，是绝对不可能相遇的是吧；除非这个链表有环；画面：讲者指着白板上只有水平直线（未画圈）的部分说明无环情形，再指圈说明有环情形。",
+          "time_start": 66,
+          "time_end": 100
+        },
+        {
+          "id": "d7c8a5aa25af_q8",
+          "type": "joint",
+          "question": "代码实现部分，while循环的终止条件为什么要同时判断fast!=NULL和fast->next!=NULL？这与图中快指针的走法有何对应关系？",
+          "reference_answer": "因为快指针每次跳两步（fast=fast->next->next），为避免空指针解引用，必须保证fast本身不为空且fast的next也不为空；白板代码while(fast!=NULL && fast->next!=NULL)正对应图中快指针\"两步两步跳\"的走法。",
+          "evidence": "字幕：快指针它不能为空是吧……同时我们还需要判断什么，判断快指针它的下一个部位空……因为我的快指针是两步两步的去跳的；画面：白板左上写有 while(fast!=NULL && fast->next!=NULL) 及 fast = fast->next->next。",
+          "time_start": 985,
+          "time_end": 1005
+        },
+        {
+          "id": "d7c8a5aa25af_q9",
+          "type": "unanswerable",
+          "question": "视频中讲者是否给出了环形链表I（判断是否有环）在力扣上的题号？",
+          "reference_answer": "没有。视频结尾截图只展示了\"142.环形链表II\"的页面标题，并未提及判断环存在的力扣题号（141），讲者全程也没有说出该题号。",
+          "evidence": "",
+          "time_start": -1,
+          "time_end": -1
+        },
+        {
+          "id": "d7c8a5aa25af_q10",
+          "type": "unanswerable",
+          "question": "讲者在视频里有没有比较用哈希表法和快慢指针法解决环形链表的空间复杂度优劣？",
+          "reference_answer": "没有。视频全程只讲快慢指针（双指针）思路及其数学推导，未提及哈希表解法，也未做任何空间复杂度的对比分析。",
+          "evidence": "",
+          "time_start": -1,
+          "time_end": -1
+        }
+      ]
+    },
+    {
+      "video_id": "079807e4a7e0",
+      "bv": "BV17h411h7UH",
+      "page": "",
+      "name": "卡尔爬楼梯",
+      "url": "https://www.bilibili.com/video/BV17h411h7UH?spm_id_from=333.788.videopod.sections&vd_source=df8a6b0f97f3766477ffa90a3c5b2635",
+      "cases": [
+        {
+          "id": "079807e4a7e0_q1",
+          "type": "single_hop",
+          "question": "视频开头主讲人自我介绍叫什么名字？",
+          "reference_answer": "程序员卡尔",
+          "evidence": "字幕：「我是程序员卡尔」",
+          "time_start": 5,
+          "time_end": 6
+        },
+        {
+          "id": "079807e4a7e0_q2",
+          "type": "single_hop",
+          "question": "在这道爬楼梯题目里，一步最多可以迈几个台阶？",
+          "reference_answer": "一个或两个台阶",
+          "evidence": "字幕：「可以迈一个台阶 一步也可以迈两个台阶」",
+          "time_start": 69,
+          "time_end": 72
+        },
+        {
+          "id": "079807e4a7e0_q3",
+          "type": "multi_hop",
+          "question": "主讲人为什么认为把 dp[0] 初始化成 1 在含义上说不通？请结合他对 dp 数组含义和题目条件的说明回答。",
+          "reference_answer": "因为 dp[i] 的含义是“达到第 i 阶的方法数”，而题目规定 n 是正整数，n=0 属于异常/无意义情况，所以 dp[0] 没有对应的实际台阶，初始化成 1 在含义上解释不通（只是代码能跑通而已）。",
+          "evidence": "字幕：「dp[i]: 达到第i阶 有dp[i]种方法」+「题目描述给出的n是一个正整数……n为0 这种情况是异常情况」+「这个dp0其实是说不通的……这个含义压根他就没有意义」",
+          "time_start": 316,
+          "time_end": 593
+        },
+        {
+          "id": "079807e4a7e0_q4",
+          "type": "multi_hop",
+          "question": "本期视频里，主讲人实际演示了“动规五部曲”中的哪几步？各对应什么内容？",
+          "reference_answer": "五步都演示了：①确定 dp 数组及下标含义；②确定递推公式 dp[i]=dp[i-1]+dp[i-2]；③初始化 dp 数组（dp1=1、dp2=2）；④确定遍历顺序（从前向后）；⑤推导 dp 数组并验证（得到 1、2、3、5、8、13）。",
+          "evidence": "字幕：「动规五部曲的第一部呢 其实就是确定dp数组的含义」+「第二步是确定递推公式」+「也就是如何初始化这个递推数组」+「动规五部曲里边的第四部 也就是确定遍历顺序」+「第五步……把这个dp数组呢 我们去给他推导一下」",
+          "time_start": 314,
+          "time_end": 1267
+        },
+        {
+          "id": "079807e4a7e0_q5",
+          "type": "visual_only",
+          "question": "主讲人右后方墙上挂的那张地图，顶部印着的标题文字是什么？",
+          "reference_answer": "中华人民共和国地图",
+          "evidence": "画面：主讲人右后方墙上挂着一张彩色中国地图，顶部印有“中华人民共和国地图”字样，该文字未出现在任何口播字幕中。",
+          "time_start": 3,
+          "time_end": 10
+        },
+        {
+          "id": "079807e4a7e0_q6",
+          "type": "visual_only",
+          "question": "主讲人身上穿的短袖 T 恤是什么颜色？",
+          "reference_answer": "灰色",
+          "evidence": "画面：主讲人全程穿着一件灰色圆领短袖 T 恤，字幕中从未提及服装颜色。",
+          "time_start": 3,
+          "time_end": 5
+        },
+        {
+          "id": "079807e4a7e0_q7",
+          "type": "joint",
+          "question": "当主讲人指着白板左侧说“这个是不是就是一个斐波那契数列”时，白板上从 1 阶到 6 阶对应写出的数值依次是什么？",
+          "reference_answer": "1、2、3、5、8、13",
+          "evidence": "字幕：「这个是不是就是一个斐波那契数列」+ 画面：白板左侧“1阶~6阶”一列旁手写数字依次为 1种、2种、3种、5种、8种、13种。",
+          "time_start": 1247,
+          "time_end": 1267
+        },
+        {
+          "id": "079807e4a7e0_q8",
+          "type": "joint",
+          "question": "当主讲人说“这个代码是可以跑出正确的结果的”时，画面左下角同时浮现了什么图形？",
+          "reference_answer": "一个二维码（“代码随想录”公众号的扫码面板）",
+          "evidence": "字幕：「这个代码是可以跑出正确的结果的」+ 画面：左下角出现带“扫码关注微信公众号 代码随想录”提示的二维码面板。",
+          "time_start": 851,
+          "time_end": 860
+        },
+        {
+          "id": "079807e4a7e0_q9",
+          "type": "unanswerable",
+          "question": "“代码随想录”这个微信公众号目前有多少粉丝？",
+          "reference_answer": "视频中没有提及该公众号的粉丝数量。",
+          "evidence": "",
+          "time_start": 0,
+          "time_end": 952
+        },
+        {
+          "id": "079807e4a7e0_q10",
+          "type": "unanswerable",
+          "question": "主讲人佩戴的眼镜是什么品牌？",
+          "reference_answer": "视频中没有提及眼镜的品牌。",
+          "evidence": "",
+          "time_start": 0,
+          "time_end": 952
+        }
+      ]
+    },
+    {
+      "video_id": "116ab6082bb7",
+      "bv": "BV1v4Mh6eEuE",
+      "page": "",
+      "name": "Deep Agents 实战 1️⃣2️⃣ HITL 人机环路",
+      "url": "https://www.bilibili.com/video/BV1v4Mh6eEuE?spm_id_from=333.788.videopod.sections&vd_source=df8a6b0f97f3766477ffa90a3c5b2635",
+      "cases": [
+        {
+          "id": "116ab6082bb7_q1",
+          "type": "single_hop",
+          "question": "视频标题中提到的“HITL”具体指的是什么？",
+          "reference_answer": "HITL 基础 — 配置与决策。",
+          "evidence": "第12讲：HITL 基础 — 配置与决策",
+          "time_start": 0,
+          "time_end": 50
+        },
+        {
+          "id": "116ab6082bb7_q2",
+          "type": "single_hop",
+          "question": "在最小可运行配置代码示例中，用于保存和恢复状态的组件是什么？",
+          "reference_answer": "checkpoint（检查点）。",
+          "evidence": "checkpoint: 保存可恢复状态",
+          "time_start": 127,
+          "time_end": 223
+        },
+        {
+          "id": "116ab6082bb7_q3",
+          "type": "multi_hop",
+          "question": "根据视频讲解，如果Agent的自主性越高，为什么越需要设置安全边界？",
+          "reference_answer": "因为自主性越高意味着执行效率提升，但同时也带来了风险增加的可能。因此需要在自主执行和人工边界之间取得平衡，通过设置安全边界（如人工审核高风险操作）来确保风险可控。",
+          "evidence": "画面显示天平左侧是“自主执行 (效率提升)”，右侧是“人工边界 (风险可控)”，字幕提示“自主性越高，越需要安全边界”。后续幻灯片详细解释了四种决策方式如何针对不同工具开放不同的人工工作。",
+          "time_start": 51,
+          "time_end": 126
+        },
+        {
+          "id": "116ab6082bb7_q4",
+          "type": "multi_hop",
+          "question": "在批量工具调用的场景下，恢复请求时 decisions 列表必须满足哪三个条件才能正确对应 action_requests？",
+          "reference_answer": "数量相同、顺序相同、每个动作一个 decision。",
+          "evidence": "幻灯片底部列出了三个关键点：数量相同、顺序相同、每个动作一个 decision。同时展示了左侧 action_requests 的三个动作分别对应右侧 decisions 列表中的 approve、reject、respond。",
+          "time_start": 1014,
+          "time_end": 1095
+        },
+        {
+          "id": "116ab6082bb7_q5",
+          "type": "visual_only",
+          "question": "视频中展示了一个天平动画，天平的左端托盘里放着什么图标？",
+          "reference_answer": "一个机器人的头部图标，旁边有一个对勾符号。",
+          "evidence": "画面中显示一个天平，左侧托盘上画着一个机器人头像，代表“自主执行”。",
+          "time_start": 51,
+          "time_end": 126
+        },
+        {
+          "id": "116ab6082bb7_q6",
+          "type": "visual_only",
+          "question": "在介绍文件系统权限中断的代码块上方，有一个带锁图标的文件夹，这个文件夹的名字叫什么？",
+          "reference_answer": "secrets。",
+          "evidence": "画面中间有一个橙色的文件夹图标，上面写着“secrets”，并带有锁的标志，指向代码中的 paths=[\"/secrets/**\"]。",
+          "time_start": 1138,
+          "time_end": 1194
+        },
+        {
+          "id": "116ab6082bb7_q7",
+          "type": "joint",
+          "question": "当用户选择“拒绝（reject）”某个工具调用时，系统会向 Agent 返回什么内容？",
+          "reference_answer": "系统会将用户在 decisions 中配置的 message 字段的内容作为反馈返回给 Agent，且该工具不会执行。",
+          "evidence": "字幕提到“拒绝工具执行，并把原因反馈给 Agent”。画面流程图显示 reject 动作会导致“工具不会执行”，并且“message 会返回给 Agent”，代码示例中展示了 {'type': 'reject', 'message': '...'} 的结构。",
+          "time_start": 1412,
+          "time_end": 1498
+        },
+        {
+          "id": "116ab6082bb7_q8",
+          "type": "joint",
+          "question": "在“resume: edit”的操作流程图中，从“原始参数”到“修改后执行”中间经历了哪个步骤？",
+          "reference_answer": "人工修改。",
+          "evidence": "字幕标题为“先改参数，再执行工具”。画面下方的流程图明确标注了三个阶段：原始参数 -> 人工修改 -> 修改后执行。",
+          "time_start": 1246,
+          "time_end": 1313
+        },
+        {
+          "id": "116ab6082bb7_q9",
+          "type": "unanswerable",
+          "question": "视频中是否提到了如何使用 Redis 数据库来实现 checkpoint 功能？",
+          "reference_answer": "视频中没有提及 Redis。",
+          "evidence": "",
+          "time_start": 0,
+          "time_end": 0
+        },
+        {
+          "id": "116ab6082bb7_q10",
+          "type": "unanswerable",
+          "question": "关于多模态大模型处理图像输入的具体技术细节，视频中有涉及吗？",
+          "reference_answer": "视频完全没有涉及多模态大模型的图像输入处理技术。",
+          "evidence": "",
+          "time_start": 0,
+          "time_end": 0
+        }
+      ]
+    },
+    {
+      "video_id": "adef16e057e2",
+      "bv": "BV1v9DBBtEym",
+      "page": "",
+      "name": "ClaudeCode 源码精读-agent loop",
+      "url": "https://www.bilibili.com/video/BV1v9DBBtEym/?spm_id_from=333.337.search-card.all.click&vd_source=df8a6b0f97f3766477ffa90a3c5b2635",
+      "cases": [
+        {
+          "id": "adef16e057e2_q1",
+          "type": "visual_only",
+          "question": "视频开头展示的模块层级图（module-layers.pdf）中，最顶部的入口层包含哪些主要模块？",
+          "reference_answer": "入口层主要包含 main.tsx (CLI入口)、cli.tsx、commands.ts、tools.ts、screens/REPL.tsx 等模块。",
+          "evidence": "画面在00:00-00:15清晰展示了名为'module-layers.pdf'的架构图，顶部黄色区域标注为'入口层'，内部方框文字显示上述模块名称。",
+          "time_start": 0,
+          "time_end": 15
+        },
+        {
+          "id": "adef16e057e2_q2",
+          "type": "visual_only",
+          "question": "视频中用户在终端执行了什么命令来查看当前目录下的文件列表？",
+          "reference_answer": "用户执行了 'ls -la' 命令。",
+          "evidence": "在07:36左右，画面下方的终端窗口中，用户输入并回车执行了 'ls -la' 命令，随后输出了详细的文件列表信息。",
+          "time_start": 455,
+          "time_end": 460
+        },
+        {
+          "id": "adef16e057e2_q3",
+          "type": "single_hop",
+          "question": "根据视频演示，Claude Code SDK 的核心查询引擎类叫什么名字？",
+          "reference_answer": "QueryEngine。",
+          "evidence": "字幕提到：\"核心查询引擎类叫 QueryEngine\"。",
+          "time_start": 298,
+          "time_end": 305
+        },
+        {
+          "id": "adef16e057e2_q4",
+          "type": "single_hop",
+          "question": "视频中提到的上下文构建过程主要涉及哪两个步骤？",
+          "reference_answer": "获取系统提示词（getSystemPrompt）和获取上下文（getContext）。",
+          "evidence": "字幕提到：\"上下文构建... 主要是 getSystemPrompt 和 getContext\"。",
+          "time_start": 350,
+          "time_end": 360
+        },
+        {
+          "id": "adef16e057e2_q5",
+          "type": "joint",
+          "question": "结合架构图和代码演示，当调用 `query()` 函数时，它是如何与 `QueryEngine` 类进行交互的？",
+          "reference_answer": "`query()` 函数是外部调用的入口点，它内部实例化 `QueryEngine` 对象，并将参数传递给该对象的构造函数或方法，从而启动查询流程。",
+          "evidence": "字幕提到：\"query 函数... 会创建一个 QueryEngine 实例\"；画面中（约11:26）的代码片段显示 `const engine = new QueryEngine(options)`，证实了这一实例化过程。",
+          "time_start": 680,
+          "time_end": 700
+        },
+        {
+          "id": "adef16e057e2_q6",
+          "type": "joint",
+          "question": "视频后半段展示的时序图中，从左侧的 `main.tsx` 到右侧的 `claude.ts` API 调用之间，中间经过了哪些关键的处理阶段？",
+          "reference_answer": "依次经过了 QueryEngine 初始化、并行获取上下文（Prompts/Context）、以及核心的 query() 循环处理阶段。",
+          "evidence": "字幕提到：\"接下来看这个 headless-flow-simple.pdf... 这里有个并行的箭头... 然后才是 query loop\"；画面（12:26起）清晰展示了时序图的泳道结构，涵盖了这些步骤。",
+          "time_start": 740,
+          "time_end": 760
+        },
+        {
+          "id": "adef16e057e2_q7",
+          "type": "unanswerable",
+          "question": "视频中是否详细解释了 Claude Code 是如何实现多模态图片识别功能的？",
+          "reference_answer": "视频中没有提及。",
+          "evidence": "",
+          "time_start": 0,
+          "time_end": 0
+        },
+        {
+          "id": "adef16e057e2_q8",
+          "type": "unanswerable",
+          "question": "视频演示过程中，用户是否展示了如何使用 Git 进行版本回滚的操作？",
+          "reference_answer": "视频中没有展示。",
+          "evidence": "",
+          "time_start": 0,
+          "time_end": 0
+        },
+        {
+          "id": "adef16e057e2_q9",
+          "type": "multi_hop",
+          "question": "视频中先展示了模块层级图，后又展示了具体代码实现。请问在层级图中位于底部的“工具执行”模块，在后续代码演示中对应的是哪个具体的 Python 类或函数？",
+          "reference_answer": "对应的是 `runToolCall` 函数或相关的工具执行逻辑。",
+          "evidence": "视频前段（00:00-01:00）展示的层级图中底部有“工具执行”模块；后段代码演示（约11:00-12:00）中出现了 `runToolCall` 的实现，两者通过架构映射关联。",
+          "time_start": 60,
+          "time_end": 720
+        },
+        {
+          "id": "adef16e057e2_q10",
+          "type": "multi_hop",
+          "question": "视频前半部分提到了 `QueryEngine` 类的核心作用，后半部分又展示了 `context-flow.pdf` 流程图。请综合这两部分内容，说明 `QueryEngine` 在上下文构建阶段的主要职责是什么？",
+          "reference_answer": "`QueryEngine` 负责协调并行的上下文获取任务（如系统提示词和用户上下文），并将它们整合后用于后续的查询循环。",
+          "evidence": "前半部分字幕指出 `QueryEngine` 是核心查询引擎；后半部分流程图（15:30起）显示 `QueryEngine.ts` 发起对 `getContext` 和 `getSystemPrompt` 的并行调用，体现了其协调职责。",
+          "time_start": 300,
+          "time_end": 950
+        }
+      ]
+    }
+  ]
+}
