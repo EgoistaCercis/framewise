@@ -164,6 +164,10 @@ framewise/
   即 87.5% 的跨片段问题检索不完整（单次 top-k 难以覆盖分散的多处信息）
 - **无依据题 100% 拒答**：幻觉抑制扎实，未出现编造
 
+> **检索 vs 全量注入**：同评测集上，不检索、直接注入整段字幕**胜出 10/11 项**
+> （`multi_hop` 忠实度 0.414→0.781），且因命中前缀缓存，**等效成本只有 RAG 的 35%**。
+> 详见 [evaluation/README.md](evaluation/README.md)。
+
 详见 [evaluation/README.md](evaluation/README.md)（含已知局限与复现方式）。
 
 ## 📄 协议
