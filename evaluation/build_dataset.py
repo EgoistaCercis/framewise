@@ -92,8 +92,15 @@ def main():
             t = q.get("type")
             if t not in VALID_TYPES:
                 problems.append(f"{e['name']} 第{n}题类型非法: {t}")
+            # time_start / time_end 兼容两种形式：
+            #   - 单值：单一答案区间（single_hop / visual_only / joint / unanswerable）
+            #   - 并列列表：多个答案片段，按索引一一对应（multi_hop）
             ts, te = q.get("time_start", 0), q.get("time_end", 0)
-            if ts < 0 or te < 0:
+            _ts = ts if isinstance(ts, list) else [ts]
+            _te = te if isinstance(te, list) else [te]
+            if len(_ts) != len(_te):
+                problems.append(f"{e['name']} 第{n}题 start/end 长度不一致")
+            if any(v < 0 for v in _ts) or any(v < 0 for v in _te):
                 problems.append(f"{e['name']} 第{n}题时间戳为负: {ts}~{te}")
             type_count[t] = type_count.get(t, 0) + 1
             cases.append({
@@ -121,8 +128,9 @@ def main():
             "videos": len(videos),
             "questions": sum(len(v["cases"]) for v in videos),
             "type_distribution": type_count,
-            "subtitle_source": "asr",
-            "note": "字幕由 ASR 生成，与评测集 evidence 引用的官方字幕存在差异，会影响检索指标",
+            "subtitle_source": "bilibili_ai_subtitle",
+            "note": "字幕取自 B站 AI 字幕（平台机器转写），仍有识别错误（如 numpy→南派），会影响检索指标",
+            "time_range_note": "multi_hop 的 time_start/time_end 为并列列表，按索引一一对应多个答案片段",
         },
         "videos": videos,
     }

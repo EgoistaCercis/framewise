@@ -111,10 +111,16 @@ def extract_citations(answer: str) -> list:
     return out
 
 
-def citation_hit(answer: str, ts: float, te: float) -> dict:
-    """引用准确性：回答里的时间戳是否指向答案时间段（自动判定，无需 LLM）"""
+def citation_hit(answer: str, ts, te) -> dict:
+    """引用准确性：回答里的时间戳是否指向答案时间段（自动判定，无需 LLM）
+
+    ts/te 支持单值或并列列表（multi_hop 题有多个答案片段）。
+    """
+    ranges = list(zip(ts, te)) if isinstance(ts, list) else [(ts, te)]
     cites = extract_citations(answer)
     if not cites:
-        return {"has_citation": False, "accurate": None, "cites": []}
-    hit = any(c[0] <= te and c[1] >= ts for c in cites)
-    return {"has_citation": True, "accurate": hit, "cites": cites}
+        return {"has_citation": False, "accurate": None, "cites": [],
+                "cited_segments": 0, "total_segments": len(ranges)}
+    covered = {i for c in cites for i, (s, e) in enumerate(ranges) if c[0] <= e and c[1] >= s}
+    return {"has_citation": True, "accurate": bool(covered), "cites": cites,
+            "cited_segments": len(covered), "total_segments": len(ranges)}
