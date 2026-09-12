@@ -19,6 +19,7 @@
 import asyncio
 import random
 
+import httpx
 from loguru import logger
 from openai import (
     AsyncOpenAI,
@@ -133,14 +134,17 @@ async def _client(cfg: dict) -> AsyncOpenAI:
                 _clients[key] = AsyncOpenAI(
                     base_url=cfg["base_url"],
                     api_key=cfg["api_key"],
-                    timeout=120.0,
+                    timeout=config.LLM_TIMEOUT,
                 )
     return _clients[key]
 
 
 # ── 统一重试策略 ──────────────────────────────────────────
 RETRYABLE_STATUS = {429, 500, 502, 503, 504}
-RETRYABLE_EXC = (APIConnectionError, APITimeoutError, RateLimitError)
+# httpx.TransportError 一并纳入：网关里有裸 httpx 调用（取 ASR 转写结果），
+# 那些路径抛的是 httpx 自己的异常，不是 openai SDK 包装过的，
+# 不纳进来的话 _with_retry 对它们形同虚设。
+RETRYABLE_EXC = (APIConnectionError, APITimeoutError, RateLimitError, httpx.TransportError)
 MAX_RETRIES = 3
 BASE_DELAY = 0.6
 
@@ -164,7 +168,9 @@ async def _with_retry(fn, *, retries: int = MAX_RETRIES, desc: str = ""):
             if e.status_code not in RETRYABLE_STATUS or attempt >= retries:
                 raise
             last = e
-            await asyncio.sleep(BASE_DELAY * (2 ** attempt))
+            # 同样加抖动：原来只有网络错误分支有抖动，429/5xx 没有 ——
+            # 被限流时一批并发请求会按同样的退避曲线同步重试，形成波纹、再次撞限流
+            await asyncio.sleep(BASE_DELAY * (2 ** attempt) + random.uniform(0, 0.3))
     raise last
 
 
@@ -631,17 +637,39 @@ async def asr_url(audio_url: str, provider: str = None,
         file_urls=[audio_url],
         language_hints=["zh", "en"],
     )
+    task_id = task.output.task_id
+
     # Transcription.wait 是 DashScope SDK 的**同步阻塞轮询**，长视频要等好几分钟。
     # 直接在事件循环里调用会把整个后端冻住——期间所有在线用户的对话全部卡死。
     # （与评测侧给 ffmpeg 抽帧加 to_thread 是同一类问题，只是这个藏在 SDK 里）
-    result = await asyncio.to_thread(Transcription.wait, task=task.output.task_id)
+    #
+    # 只重试「等待」、不重试「提交」：重新 async_call 会产生第二个转写任务、
+    # 重复计费；拿同一个 task_id 重新轮询是安全的。
+    result = await _with_retry(
+        lambda: asyncio.to_thread(Transcription.wait, task=task_id),
+        desc="asr_url_wait",
+    )
     if result.status_code != HTTPStatus.OK:
-        raise RuntimeError(f"ASR failed: {result.code} - {result.message}")
+        raise RuntimeError(f"ASR 任务失败（{getattr(result, 'code', '?')}）："
+                           f"{getattr(result, 'message', '')}")
 
-    transcript_url = result.output["results"][0]["transcription_url"]
-    import httpx
+    # 任务级成功 ≠ 文件级成功：每个文件有独立的 subtask_status。
+    # 原来直接 result.output["results"][0]["transcription_url"]，
+    # 文件级失败时会抛 KeyError/IndexError —— 把「转写失败」伪装成「代码有 bug」。
+    items = (getattr(result, "output", None) or {}).get("results") or []
+    if not items:
+        raise RuntimeError(f"ASR 未返回任何结果：{getattr(result, 'message', '')}")
+    first = items[0]
+    if first.get("subtask_status") != "SUCCEEDED":
+        raise RuntimeError(f"ASR 文件级转写失败（{first.get('subtask_status')}）："
+                           f"{first.get('message', '')}")
+    if not first.get("transcription_url"):
+        raise RuntimeError(f"ASR 转写成功但未返回结果地址：{first}")
+    transcript_url = first["transcription_url"]
+
+    # 取转写结果只是一次普通 GET，重试安全（不会重复触发转写）
     async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.get(transcript_url)
+        resp = await _with_retry(lambda: client.get(transcript_url), desc="asr_transcript")
         resp.raise_for_status()
         transcription = resp.json()
 

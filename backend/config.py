@@ -33,6 +33,12 @@ LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-v4-pro")
 # 推理模型需要更大 max_tokens（reasoning + 回答）
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))
 
+# 单次模型调用的整体超时（秒）。
+# 注意这是个**整体**超时，不是只连不上的超时：推理模型生成上万 token 很容易吃满。
+# 配合网关的重试（超时可重试），最坏情况是一道题重头生成 3 次。
+# 评测里的 judge 用 max_tokens=16000，本地实测偶尔会逼近这个上限，故做成可配置。
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "120"))
+
 # Smart Chat（前端可切换的高阶模型，厂家/endpoint/key/model 均独立于 default）
 # 前端「智能」按钮开启 chat 时使用；未配置 SMART_LLM_API_KEY 时自动回落 default
 SMART_LLM_PROVIDER = os.getenv("SMART_LLM_PROVIDER", LLM_PROVIDER)

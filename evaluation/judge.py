@@ -151,6 +151,36 @@ async def judge_refusal(question: str, answer: str, votes: int = 3) -> dict:
     }
 
 
+async def judge_record(rec: dict) -> dict:
+    """对一条评测记录做完整裁判，结果写回 rec。
+
+    ★ 统一入口：原先 V2/V3/V4 各有一份近乎复制的 judge_one，而且**字段不一致**——
+    V2 存 refusal_reason / unsupported / relevancy_reason，V3/V4 不存；
+    V4 打印 refusal_votes 却从来没存过（日志里那一列恒为空）。
+    结果是同一个指标在不同变体里的口径对不上，横向比较时无从判断差异来自模型还是来自记账。
+
+    要求 rec 具备：type / question / answer，非 unanswerable 时还需
+    context / reference_answer / _ts / _te。
+
+    失败时**直接抛异常**，由调用方记进 judge_error —— 绝不静默当 0 分。
+    """
+    if rec["type"] == "unanswerable":
+        j = await judge_refusal(rec["question"], rec["answer"])
+        rec["refused"] = j["refused"]
+        rec["refusal_votes"] = j["votes"]
+        rec["refusal_reason"] = j["reason"]
+    else:
+        f = await judge_faithfulness(rec["context"], rec["answer"])
+        r = await judge_relevancy(rec["question"], rec["reference_answer"], rec["answer"])
+        c = citation_hit(rec["answer"], rec["_ts"], rec["_te"])
+        rec.update({
+            "faithfulness": f["score"], "unsupported": f["unsupported"][:3],
+            "relevancy": r["score"], "relevancy_reason": r["reason"],
+            "has_citation": c["has_citation"], "citation_accurate": c["accurate"],
+        })
+    return rec
+
+
 def extract_citations(answer: str) -> list:
     """从回答里抽出时间戳引用，如【12:35~13:08】→ [(755, 788)]"""
     out = []

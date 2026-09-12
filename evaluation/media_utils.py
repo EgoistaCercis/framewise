@@ -49,7 +49,16 @@ def local_video_path(video_id: str) -> str | None:
 
 
 async def extract_frame_for(video_id: str, state: dict, timestamp: float) -> tuple:
-    """抽帧，返回 (frame_path, error)。优先本地，回退 URL。
+    """抽帧，返回 (frame_path, error)。
+
+    源的选择顺序：
+      1. 本地评测视频文件（有就直接用）
+      2. `state["video_path"]`（产品下载的本地文件）
+      3. URL 拉流（仅当上面都没有、且是 URL 模式）
+
+    注意**不是「本地失败就回退 URL」**：本地文件存在时若抽帧失败，直接返回错误，
+    不会再去试 URL —— 本地 ffmpeg 都失败了，URL 基本也不会更好，而且产品路径下
+    部分 B站视频 yt-dlp 根本拿不到直链。只有「本地根本没这个文件」才往下走。
 
     `extract_frame` 内部是同步 `subprocess.run`，直接 await 会阻塞事件循环、
     把并发退化成串行，所以丢到线程池；同一时间点再按锁串行，避免写坏缓存图。

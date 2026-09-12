@@ -61,19 +61,10 @@ async def extract_one(video_id: str, state: dict, ts: float, sem: asyncio.Semaph
 
 
 async def judge_one(rec: dict, sem: asyncio.Semaphore) -> dict:
+    """裁判单条记录。判定逻辑统一在 judge.judge_record（原先三个脚本各一份复制品）。"""
     async with sem:
         try:
-            if rec["type"] == "unanswerable":
-                j = await judge.judge_refusal(rec["question"], rec["answer"])
-                rec["refused"] = j["refused"]
-            else:
-                f = await judge.judge_faithfulness(rec["context"], rec["answer"])
-                r = await judge.judge_relevancy(rec["question"], rec["reference_answer"], rec["answer"])
-                c = judge.citation_hit(rec["answer"], rec["_ts"], rec["_te"])
-                rec.update({
-                    "faithfulness": f["score"], "relevancy": r["score"],
-                    "has_citation": c["has_citation"], "citation_accurate": c["accurate"],
-                })
+            await judge.judge_record(rec)
             rec["judge_error"] = None
         except Exception as e:
             rec["judge_error"] = str(e)[:200]

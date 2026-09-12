@@ -85,21 +85,10 @@ async def answer_one(transcript: str, question: str) -> tuple:
 
 
 async def judge_one(rec: dict, sem: asyncio.Semaphore) -> dict:
+    """裁判单条记录。判定逻辑统一在 judge.judge_record（原先三个脚本各一份复制品）。"""
     async with sem:
         try:
-            if rec["type"] == "unanswerable":
-                j = await judge.judge_refusal(rec["question"], rec["answer"])
-                rec["refused"] = j["refused"]
-                rec["refusal_reason"] = j["reason"]
-            else:
-                f = await judge.judge_faithfulness(rec["context"], rec["answer"])
-                r = await judge.judge_relevancy(rec["question"], rec["reference_answer"], rec["answer"])
-                c = judge.citation_hit(rec["answer"], rec["_ts"], rec["_te"])
-                rec.update({
-                    "faithfulness": f["score"], "unsupported": f["unsupported"][:3],
-                    "relevancy": r["score"], "relevancy_reason": r["reason"],
-                    "has_citation": c["has_citation"], "citation_accurate": c["accurate"],
-                })
+            await judge.judge_record(rec)
             rec["judge_error"] = None
         except Exception as e:
             rec["judge_error"] = str(e)[:200]
@@ -195,12 +184,24 @@ async def main():
     # 成本
     cold = [r for r in records if r["cold"]]
     warm = [r for r in records if not r["cold"]]
+
+    # ── 冷启动自检 ──
+    # provider 侧的前缀缓存是**跨运行持久**的：如果上一次跑批刚跑过同一个视频，
+    # 这次的第一题（按设计该是冷启动）也会命中缓存。那样「冷启动成本」就是假的，
+    # 而且数值会随「这是第几次跑批」漂移，横向比较失去意义。
+    not_truly_cold = [r for r in cold if r["cached_tokens"] > 0]
+    if not_truly_cold:
+        print(f"\n[警告] {len(not_truly_cold)}/{len(cold)} 个「冷启动」题实际命中了缓存 —— "
+              f"说明前缀缓存在上次跑批后仍然有效，本次的冷启动成本被低估。")
+        print("        成本对比请在同一个跑批轮次内比较，或隔足够久让缓存过期。")
     cost = {
         "cold_avg_prompt_tokens": round(sum(r["prompt_tokens"] for r in cold) / len(cold), 0) if cold else 0,
         "warm_avg_prompt_tokens": round(sum(r["prompt_tokens"] for r in warm) / len(warm), 0) if warm else 0,
         "warm_avg_cached_tokens": round(sum(r["cached_tokens"] for r in warm) / len(warm), 0) if warm else 0,
         "total_prompt_tokens": sum(r["prompt_tokens"] for r in records),
         "total_completion_tokens": sum(r["completion_tokens"] for r in records),
+        # 冷启动是否名副其实：这些题本应 cached=0，非 0 说明缓存跨运行存活了
+        "cold_not_cached": len(not_truly_cold), "cold_total": len(cold),
         "avg_latency_s": round(sum(r["latency_s"] for r in records) / len(records), 1),
     }
     print("-" * 88)
