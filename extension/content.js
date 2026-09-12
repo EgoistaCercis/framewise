@@ -186,7 +186,7 @@
         else { document.body.appendChild(trigger); if (mini.parentNode !== document.body) document.body.appendChild(mini); }
     });
 
-    function showMini() { if (window._fwReady) { loadHistory(); } else if (!videoId) { initVideo(); } else { var c = document.getElementById("fw-msgs"); if (c && !c.innerHTML.trim()) c.innerHTML = '<div style="text-align:center;padding:30px 20px;color:var(--fw-text-2);font-size:12px;line-height:2;">💡 点击播放器的 <b style="color:#00a1d6;">AI字幕</b>，获取精准回答</div>'; } mini.style.display = "flex"; trigger.style.display = "none"; }
+    function showMini() { if (window._fwReady) { loadHistory(); } else if (!videoId) { initVideo(); } else { var c = document.getElementById("fw-msgs"); if (c && !c.innerHTML.trim()) c.innerHTML = '<div style="text-align:center;padding:30px 20px;color:var(--fw-text-2);font-size:12px;line-height:2;">💡 点击播放器中的 <b style="color:#00a1d6;">字幕 → 中文</b>，获取更好的体验</div>'; } mini.style.display = "flex"; trigger.style.display = "none"; }
     function hideMini() { mini.style.display = "none"; trigger.style.display = "flex"; }
 
     // ── 事件绑定 ──
@@ -201,7 +201,7 @@
             isHistView = false;
             if (window._fwReady && videoId) { loadHistory(); }
             else if (videoId) { _c.innerHTML = '<div style="text-align:center;padding:30px 20px;color:var(--fw-text-2);font-size:12px;">⏳ 视频处理中...</div>'; }
-            else { _c.innerHTML = '<div style="text-align:center;padding:30px 20px;color:var(--fw-text-2);font-size:12px;">💡 点击 AI字幕 建立索引</div>'; }
+            else { _c.innerHTML = '<div style="text-align:center;padding:30px 20px;color:var(--fw-text-2);font-size:12px;">💡 点击播放器中的 <b style="color:#00a1d6;">字幕 → 中文</b>，获取更好的体验</div>'; }
             return;
         }
         isHistView = true;
@@ -388,7 +388,7 @@
         .catch(function () {});
 
     // ── 初始化 ──
-    if (autoMode) { initVideo(); } else { addMsg("system", '<div style="text-align:center;">💡 点击 <b style="color:#00a1d6;">AI字幕</b>，获取精准回答<br/>自动处理已关闭，点击顶栏 🔄 手动处理</div>'); }
+    if (autoMode) { initVideo(); } else { addMsg("system", '<div style="text-align:center;">💡 点击播放器中的 <b style="color:#00a1d6;">字幕 → 中文</b>，获取更好的体验<br/>自动处理已关闭，点击顶栏 🔄 手动处理</div>'); }
 
     // ── B站字幕采集 ──
     var _subDone = false;
@@ -473,10 +473,38 @@
     var isOffline = false; setInterval(function () { fetch(API_BASE + "/api/health").then(function () { if (isOffline) { isOffline = false; updateStatus("✅ 已重连"); } }).catch(function () { if (!isOffline) { isOffline = true; updateStatus("⚠️ 断线"); } }); }, 10000);
 
     // ── 视频处理 ──
-    function initVideo(force) { updateStatus("⏳ 建立索引..."); updateProgress({ progress: 2, progress_text: "连接服务..." }); var body = { url: lastUrl }; if (force) body.force = true; fetch(API_BASE + "/api/videos/from_url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(function (r) { return r.json(); }).then(function (data) { videoId = data.video_id; if (data.status === "ready") { readyState(data); return; } if (data.status === "subtitles") { updateStatus("📝 字幕已缓存"); updateProgress({progress: 30, progress_text: "字幕已缓存，点击 🔄 处理"}); return; } updateStatus("⏳ 处理中..."); pollStatus(); }).catch(function (e) { updateStatus("❌ 连接失败"); }); }
-    function pollStatus() { (function check() { if (!videoId) { setTimeout(check, 3000); return; } fetch(API_BASE + "/api/videos/" + videoId).then(function (r) { return r.json(); }).then(function (data) { if (data.status === "ready") { readyState(data); return; } if (data.status === "error") { updateStatus("❌ 失败"); return; } if (data.status === "subtitles") { updateStatus("📝 字幕已缓存"); updateProgress({progress: 30, progress_text: "字幕已缓存，点击 🔄 处理"}); setTimeout(check, 2000); return; } if (data.progress) updateProgress(data); setTimeout(check, 2000); }).catch(function () { setTimeout(check, 5000); }); })(); }
+    function initVideo(force) { updateStatus("⏳ 建立索引..."); updateProgress({ progress: 2, progress_text: "连接服务..." }); var body = { url: lastUrl }; if (force) body.force = true; fetch(API_BASE + "/api/videos/from_url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(function (r) { return r.json(); }).then(function (data) { videoId = data.video_id; if (data.status === "ready") { readyState(data); return; } if (data.status === "subtitles") { updateStatus("📝 字幕已缓存"); updateProgress({progress: 30, progress_text: "字幕已缓存，点击 🔄 处理"}); return; } if (data.status === "no_subtitles") { noSubtitlesState(); return; } updateStatus("⏳ 处理中..."); pollStatus(); }).catch(function (e) { updateStatus("❌ 连接失败"); }); }
+    function pollStatus() { (function check() { if (!videoId) { setTimeout(check, 3000); return; } fetch(API_BASE + "/api/videos/" + videoId).then(function (r) { return r.json(); }).then(function (data) { if (data.status === "ready") { readyState(data); return; } if (data.status === "error") { updateStatus("❌ 失败"); return; } if (data.status === "no_subtitles") { noSubtitlesState(); return; } if (data.status === "subtitles") { updateStatus("📝 字幕已缓存"); updateProgress({progress: 30, progress_text: "字幕已缓存，点击 🔄 处理"}); setTimeout(check, 2000); return; } if (data.progress) updateProgress(data); setTimeout(check, 2000); }).catch(function () { setTimeout(check, 5000); }); })(); }
+    function noSubtitlesState() {
+        updateStatus("🎙️ 未找到字幕");
+        var c = document.getElementById("fw-msgs");
+        c.innerHTML =
+            '<div style="text-align:center;padding:18px 10px 12px;color:var(--fw-text-2);font-size:12px;line-height:1.9;">' +
+            '未找到该视频的字幕<br/>' +
+            '<span style="font-size:11px;color:var(--fw-text-3);">可先点击播放器中的「字幕 → 中文」<br/>或用下方按钮做语音识别</span>' +
+            '</div>' +
+            '<button id="fw-asr" style="width:100%;padding:9px;background:var(--fw-primary);border:none;border-radius:8px;color:#fff;cursor:pointer;font-size:12.5px;font-weight:600;transition:background .18s ease;">🎙️ 用语音识别生成字幕</button>' +
+            '<div style="margin-top:6px;font-size:10.5px;color:var(--fw-text-3);text-align:center;line-height:1.6;">约需 1-3 分钟，会消耗语音识别额度</div>';
+        var btn = document.getElementById("fw-asr");
+        btn.onmouseenter = function () { btn.style.background = "var(--fw-primary-strong)"; };
+        btn.onmouseleave = function () { btn.style.background = "var(--fw-primary)"; };
+        btn.onclick = function () {
+            btn.disabled = true;
+            btn.style.opacity = "0.6";
+            btn.textContent = "启动中…";
+            fetch(API_BASE + "/api/videos/" + videoId + "/generate_subtitles", { method: "POST" })
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                    if (d.status === "already_official") { addMsg("system", "已有官方字幕，无需语音识别"); return; }
+                    updateStatus("🎙️ 语音识别中...");
+                    pollStatus();
+                })
+                .catch(function () { btn.disabled = false; btn.style.opacity = "1"; btn.textContent = "🎙️ 用语音识别生成字幕"; addMsg("error", "启动语音识别失败"); });
+        };
+    }
+
     function readyState(data) { window._fwReady = true; updateStatus("✅ 就绪 (" + (data.chunk_count || "?") + "片段)"); document.getElementById("fw-input").disabled = false; document.getElementById("fw-send").disabled = false; document.getElementById("fw-msgs").innerHTML = '<div style="color:var(--fw-accent);text-align:center;padding:20px 0;">✅ 视频已就绪，开始提问吧！</div>'; loadHistory(); }
-    function updateProgress(data) { var pct = data.progress || 0; var text = data.progress_text || "处理中..."; updateStatus(text + " " + pct + "%"); var c = document.getElementById("fw-msgs"); if (c) { var hint = pct < 40 ? '<div style="text-align:center;font-size:11px;color:var(--fw-text-3);margin-bottom:8px;">💡 点击 <b style="color:#00a1d6;">AI字幕</b>，获取精准回答</div>' : ''; c.innerHTML = '<div style="text-align:center;padding:20px 0;">' + hint + '<div style="font-size:13px;color:var(--fw-text-2);margin-bottom:10px;">' + text + '</div><div class="fw-progress-track"><div class="fw-progress-bar" style="width:' + pct + '%;"></div></div><div style="font-size:12px;color:var(--fw-text-3);margin-top:6px;">' + pct + '%</div></div>'; } }
+    function updateProgress(data) { var pct = data.progress || 0; var text = data.progress_text || "处理中..."; updateStatus(text + " " + pct + "%"); var c = document.getElementById("fw-msgs"); if (c) { var hint = pct < 40 ? '<div style="text-align:center;font-size:11px;color:var(--fw-text-3);margin-bottom:8px;">💡 点击播放器中的 <b style="color:#00a1d6;">字幕 → 中文</b>，获取更好的体验</div>' : ''; c.innerHTML = '<div style="text-align:center;padding:20px 0;">' + hint + '<div style="font-size:13px;color:var(--fw-text-2);margin-bottom:10px;">' + text + '</div><div class="fw-progress-track"><div class="fw-progress-bar" style="width:' + pct + '%;"></div></div><div style="font-size:12px;color:var(--fw-text-3);margin-top:6px;">' + pct + '%</div></div>'; } }
     function loadHistory() { isHistView = false; fetch(API_BASE + "/api/videos/" + videoId + "/history?limit=30").then(function (r) { return r.json(); }).then(function (data) { if (!data || !data.length) { var _m = document.getElementById("fw-msgs"); if (!_m.innerHTML.trim()) _m.innerHTML = '<div style="text-align:center;padding:30px 20px;color:var(--fw-text-2);font-size:12px;">暂无对话，开始提问吧</div>'; return; } var c = document.getElementById("fw-msgs"); c.innerHTML = ""; data.forEach(function (m) { if (m.role === "user") { addMsg("user", esc(m.content)); } else if (m.role === "assistant") { addMsg("assistant", renderMd(m.content) + renderRefs(m.references)); } }); }).catch(function () { }); }
 
     // ── 发送问题 ──

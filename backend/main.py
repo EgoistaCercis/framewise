@@ -289,7 +289,8 @@ async def captured_subtitles_url(video_id: str, req: dict):
     logger.info(f"[{video_id}] B站 subtitle: {len(subtitles)} lines (cached, wait for index)")
     state["subtitles"] = subtitles
     state["video_hash"] = video_id
-    save_subtitle_cache(video_id, subtitles)
+    # 来源标记为 official：ASR 兜底结果不会覆盖它
+    save_subtitle_cache(video_id, subtitles, source="official")
 
     # 缓存字幕，中止正在跑的后台任务（如有），等用户手动触发索引
     state["status"] = "subtitles"
@@ -320,7 +321,8 @@ async def captured_subtitles(video_id: str, req: dict):
 
     state["subtitles"] = subtitles
     state["video_hash"] = video_id
-    save_subtitle_cache(video_id, subtitles)
+    # 来源标记为 official：ASR 兜底结果不会覆盖它
+    save_subtitle_cache(video_id, subtitles, source="official")
 
     chunks = chunk_subtitles(subtitles, video_id)
     state["chunks"] = chunks
@@ -509,6 +511,14 @@ async def process_url(background_tasks: BackgroundTasks, req: dict):
                 return {"video_id": video_id, "status": "processing", "title": st.get("original_name", url)}
             logger.info(f"[{video_id}] Subtitles cached, waiting for manual trigger")
             return {"video_id": video_id, "status": "subtitles", "title": st.get("original_name", url)}
+        elif st.get("status") == "no_subtitles":
+            # 没有官方字幕 → 原样返回，等用户决定是否用 ASR 生成（不要重跑流程）
+            logger.info(f"[{video_id}] No subtitles, awaiting user decision")
+            return {"video_id": video_id, "status": "no_subtitles", "title": st.get("original_name", url)}
+        elif st.get("status") == "processing":
+            # 正在处理（如用户刚触发了 ASR）→ 原样返回，前端继续轮询，不要重启流程
+            logger.info(f"[{video_id}] Still processing, resume polling")
+            return {"video_id": video_id, "status": "processing", "title": st.get("original_name", url)}
         elif st.get("status") == "error":
             logger.info(f"Video previously failed, retrying: {video_id}")
             del video_states[video_id]
@@ -1162,45 +1172,21 @@ async def _process_url_task(video_id: str, url: str):
             logger.info(f"[{video_id}] Subtitles from memory, skip ASR")
             _progress(30, "字幕已缓存")
         else:
-            # 2. 优先用B站AI字幕（准确、免费、带时间戳）
+            # 2. 优先用B站官方字幕（准确、免费、带时间戳）
             subtitles = extract_subtitles(url)
             if subtitles:
                 logger.info(f"[{video_id}] Got B站 subtitles: {len(subtitles)} segments")
+                save_subtitle_cache(video_id, subtitles, source="official")
                 _progress(30, "字幕已获取")
             else:
-                # 3. 获取音频 → ASR
-                import time
-                _progress(10, "获取音频流...")
-                # 尝试 DashScope URL 直传（仅对可公开访问的 URL 有效）
-                stream_url = get_audio_stream_url(url)
-                dashscope_ok = False
-                if stream_url and DASHSCOPE_API_KEY:
-                    logger.info(f"[{video_id}] Trying DashScope URL direct ASR...")
-                    t0 = time.time()
-                    try:
-                        if "mcdn.bilivideo" in stream_url or "bilivideo.com" in stream_url:
-                            raise Exception("B站CDN URL need auth, skip direct")
-                        subtitles = await transcribe_via_url(stream_url, DASHSCOPE_API_KEY)
-                        dashscope_ok = True
-                        logger.info(f"[{video_id}] DashScope ASR done in {time.time()-t0:.1f}s")
-                    except Exception as e:
-                        logger.info(f"[{video_id}] DashScope direct failed ({str(e)[:50]}), downloading...")
-
-                if not dashscope_ok:
-                    _progress(15, "下载音频中...")
-                    t0 = time.time()
-                    audio_path = download_audio(url, video_id)
-                    _progress(30, "语音识别中...")
-                    dt = time.time() - t0
-                    logger.info(f"[{video_id}] Audio downloaded in {dt:.0f}s, uploading for ASR...")
-                    t0 = time.time()
-                    subtitles = await transcribe(audio_path)
-                    logger.info(f"[{video_id}] ASR done in {time.time()-t0:.0f}s: {len(subtitles)} segments")
-                else:
-                    _progress(30, "语音识别中...")
-
-                save_subtitle_cache(video_id, subtitles)
-                _progress(60, "知识索引中...")
+                # 3. 没有官方字幕 → 【不自动跑 ASR】
+                #    ASR 慢（几分钟）且消耗额度，改为置状态、等用户点按钮触发
+                logger.info(f"[{video_id}] No official subtitles; waiting for manual ASR trigger")
+                state["status"] = "no_subtitles"
+                state["progress"] = 0
+                state["progress_text"] = "未找到字幕"
+                _save_states()
+                return
 
         state["subtitles"] = subtitles
 
@@ -1233,6 +1219,117 @@ async def _process_url_task(video_id: str, url: str):
     finally:
         if audio_path and os.path.exists(audio_path):
             cleanup_audio(video_id)
+
+
+async def _asr_and_index_task(video_id: str, url: str):
+    """用户点「用语音识别生成字幕」后触发：ASR → Chunk → Embedding → 建索引
+
+    仅在视频没有官方字幕时使用。ASR 结果标记为 source="asr"，
+    不会覆盖已有的官方字幕（见 cache_service 的来源优先级）。
+    """
+    import time
+    from backend.services.media.url_service import download_audio, cleanup_audio, get_audio_stream_url
+    from backend.services.media.cache_service import save_subtitle_cache
+    from backend.services.media.asr_service import transcribe
+    from backend.services.media.asr_api_service import transcribe_via_url
+    from backend.services.rag_pipeline.chunk_service import chunk_subtitles
+    from backend.services.rag_pipeline.embedding_service import embed_texts
+    from backend.services.rag_pipeline.vector_store import build_index
+
+    state = video_states.get(video_id)
+    if not state:
+        return
+
+    def _progress(pct, text):
+        state["progress"] = pct
+        state["progress_text"] = text
+        _save_states()
+
+    audio_path = None
+    try:
+        state["video_hash"] = video_id
+        _progress(10, "获取音频流...")
+
+        subtitles, dashscope_ok = None, False
+        stream_url = get_audio_stream_url(url) if url else None
+        if stream_url and DASHSCOPE_API_KEY:
+            logger.info(f"[{video_id}] Trying DashScope URL direct ASR...")
+            t0 = time.time()
+            try:
+                if "mcdn.bilivideo" in stream_url or "bilivideo.com" in stream_url:
+                    raise Exception("B站CDN URL need auth, skip direct")
+                subtitles = await transcribe_via_url(stream_url, DASHSCOPE_API_KEY)
+                dashscope_ok = True
+                logger.info(f"[{video_id}] DashScope ASR done in {time.time()-t0:.1f}s")
+            except Exception as e:
+                logger.info(f"[{video_id}] DashScope direct failed ({str(e)[:50]}), downloading...")
+
+        if not dashscope_ok:
+            _progress(15, "下载音频中...")
+            t0 = time.time()
+            audio_path = download_audio(url, video_id)
+            _progress(35, "语音识别中...")
+            logger.info(f"[{video_id}] Audio downloaded in {time.time()-t0:.0f}s, uploading for ASR...")
+            t0 = time.time()
+            subtitles = await transcribe(audio_path)
+            logger.info(f"[{video_id}] ASR done in {time.time()-t0:.0f}s: {len(subtitles)} segments")
+
+        if not subtitles:
+            raise RuntimeError("语音识别未返回结果")
+
+        save_subtitle_cache(video_id, subtitles, source="asr")
+        state["subtitles"] = subtitles
+        _progress(60, "知识索引中...")
+
+        chunks = chunk_subtitles(subtitles, video_id)
+        state["chunks"] = chunks
+        _progress(75, "向量化中...")
+        embeddings = await embed_texts([c["text"] for c in chunks], video_id=video_id)
+        _progress(90, "构建索引...")
+        build_index(chunks, embeddings, video_id)
+
+        state["status"] = "ready"
+        state["progress"] = 100
+        state["progress_text"] = "就绪"
+        _save_states()
+        logger.info(f"[{video_id}] Manual ASR + indexing complete!")
+    except Exception as e:
+        state["status"] = "error"
+        state["error"] = f"语音识别失败：{str(e)[:150]}"
+        _save_states()
+        logger.opt(exception=e).error(f"[{video_id}] Manual ASR task failed")
+    finally:
+        if audio_path:
+            cleanup_audio(video_id)
+
+
+@app.post("/api/videos/{video_id}/generate_subtitles")
+async def generate_subtitles(video_id: str, background_tasks: BackgroundTasks):
+    """用语音识别生成字幕（用户手动触发，用于视频没有官方字幕的情况）"""
+    from backend.services.media.cache_service import load_subtitle_source, subtitle_cache_exists
+
+    state = video_states.get(video_id)
+    if not state:
+        raise HTTPException(404, "视频不存在")
+    if state.get("status") == "processing":
+        raise HTTPException(409, "视频正在处理中")
+
+    # 已有官方字幕 → 不需要也不允许 ASR 覆盖
+    if subtitle_cache_exists(video_id) and load_subtitle_source(video_id) == "official":
+        return {"status": "already_official", "message": "已有官方字幕，无需语音识别"}
+
+    url = state.get("url")
+    if not url:
+        raise HTTPException(400, "该视频没有可用的 URL，无法进行语音识别")
+
+    state["status"] = "processing"
+    state["progress"] = 5
+    state["progress_text"] = "准备语音识别..."
+    _save_states()
+
+    background_tasks.add_task(_asr_and_index_task, video_id, url)
+    logger.info(f"[{video_id}] Manual ASR triggered by user")
+    return {"status": "processing"}
 
 
 # ═══════════════════════════════════════════

@@ -112,7 +112,7 @@ async def process_video_to_subtitles(video_path: str, video_hash: str) -> list[d
     try:
         extract_audio(video_path, audio_path)
         subtitles = await transcribe(audio_path)
-        save_subtitle_cache(video_hash, subtitles)
+        save_subtitle_cache(video_hash, subtitles, source="asr")
         return subtitles
     finally:
         if os.path.exists(audio_path):
