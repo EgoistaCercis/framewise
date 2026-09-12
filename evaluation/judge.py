@@ -82,10 +82,16 @@ async def _ask(system: str, user: str, max_tokens: int = JUDGE_MAX_TOKENS) -> di
     raise RuntimeError(f"judge 返回空内容（reasoning 吃光 token）：{last_usage}")
 
 
+# 参考材料的截断上限。注意：全量字幕方案下 context = 完整字幕（可达 1 万字），
+# 上限给小了会把后半段（如 V3 追加的画面描述）整个截掉，
+# 导致回答里那部分内容被误判为「无依据」→ 忠实度假性下降。
+CONTEXT_LIMIT = 24000
+
+
 async def judge_faithfulness(context: str, answer: str) -> dict:
-    """忠实度：回答是否忠于检索到的材料（不编造）"""
+    """忠实度：回答是否忠于参考材料（不编造）"""
     r = await _ask(FAITHFULNESS_PROMPT,
-                   f"【参考材料】\n{context[:6000]}\n\n【回答】\n{answer}")
+                   f"【参考材料】\n{context[:CONTEXT_LIMIT]}\n\n【回答】\n{answer}")
     return {"score": float(r.get("score", 0.0)), "unsupported": r.get("unsupported", [])}
 
 
@@ -96,10 +102,25 @@ async def judge_relevancy(question: str, reference: str, answer: str) -> dict:
     return {"score": float(r.get("score", 0.0)), "reason": r.get("reason", "")}
 
 
-async def judge_refusal(question: str, answer: str) -> dict:
-    """拒答判定：用于 unanswerable 题（应拒答）"""
+async def _one_refusal_vote(question: str, answer: str) -> bool:
     r = await _ask(REFUSAL_PROMPT, f"【问题】\n{question}\n\n【回答】\n{answer}")
-    return {"refused": bool(r.get("refused", False)), "reason": r.get("reason", "")}
+    return bool(r.get("refused", False))
+
+
+async def judge_refusal(question: str, answer: str, votes: int = 3) -> dict:
+    """拒答判定：用于 unanswerable 题（应拒答）
+
+    裁判在长回答上有随机性（实测同一题重复判定会出现 1/3 翻转），
+    所以跑多轮取多数，降低单次判定的噪声。
+    """
+    import asyncio as _aio
+    results = await _aio.gather(*[_one_refusal_vote(question, answer) for _ in range(votes)])
+    n_yes = sum(results)
+    return {
+        "refused": n_yes * 2 > votes,     # 过半即为拒答
+        "votes": list(results),
+        "reason": f"多数投票 {n_yes}/{votes}",
+    }
 
 
 def extract_citations(answer: str) -> list:
