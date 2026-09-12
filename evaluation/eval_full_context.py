@@ -57,21 +57,31 @@ def format_transcript(video_id: str) -> str:
 
 
 async def answer_one(transcript: str, question: str) -> tuple:
-    """全量字幕回答问题，返回 (answer, usage, latency)"""
+    """全量字幕回答问题，返回 (answer, usage, latency, error)。
+
+    error 非 None 表示这次生成失败（网络抖动、限流、超时等）。
+    **必须兜住**：外层 asyncio.gather 没开 return_exceptions，抛出去会让整场
+    评测崩掉、已经跑完的记录全部丢失——一次抖动不该毁掉几十分钟的跑批。
+    失败记录带 gen_error 占位，统计与裁判都会跳过它。
+    """
     from backend.services.llm.gateway import chat
     from backend.prompts import SYSTEM_PROMPT
     from backend.config import LLM_MAX_TOKENS
 
     t0 = time.time()
-    ans, usage = await chat(
-        messages=[
-            {"role": "user", "content": f"<transcript>\n{transcript}\n</transcript>"},
-            {"role": "user", "content": question},
-        ],
-        system_prompt=SYSTEM_PROMPT,
-        max_tokens=LLM_MAX_TOKENS,
-    )
-    return ans, usage, round(time.time() - t0, 2)
+    try:
+        ans, usage = await chat(
+            messages=[
+                {"role": "user", "content": f"<transcript>\n{transcript}\n</transcript>"},
+                {"role": "user", "content": question},
+            ],
+            system_prompt=SYSTEM_PROMPT,
+            max_tokens=LLM_MAX_TOKENS,
+        )
+        return ans, usage, round(time.time() - t0, 2), None
+    except Exception as e:
+        err = f"{type(e).__name__}: {str(e)[:200]}"
+        return f"[LLM 异常] {err}", {}, round(time.time() - t0, 2), err
 
 
 async def judge_one(rec: dict, sem: asyncio.Semaphore) -> dict:
@@ -118,11 +128,12 @@ async def main():
         print(f"--- {name}（字幕 {len(transcript)} 字 ≈ {est} tokens，{len(cases)} 题）")
 
         for i, case in enumerate(cases, 1):
-            ans, usage, lat = await answer_one(transcript, case["question"])
+            ans, usage, lat, gen_err = await answer_one(transcript, case["question"])
             rec = {
                 "id": case["id"], "type": case["type"], "question": case["question"],
                 "reference_answer": case["reference_answer"], "answer": ans,
                 "context": transcript,
+                "gen_error": gen_err,
                 "latency_s": lat,
                 "prompt_tokens": usage.get("prompt_tokens", 0),
                 "completion_tokens": usage.get("completion_tokens", 0),
@@ -132,22 +143,29 @@ async def main():
             }
             records.append(rec)
             cache = rec["cached_tokens"]
-            print(f"  [{i:2}/{len(cases)}] in={rec['prompt_tokens']:>5} cache={cache:>5} "
-                  f"{lat:>5.1f}s  {case['question'][:32]}")
-            logger.info(f"[{i}/{len(cases)}] {case['id']} [{case['type']}] "
-                        f"input={rec['prompt_tokens']}(缓存{cache}) 延迟={lat}s "
-                        f"{'冷启动' if rec['cold'] else '缓存命中'}")
+            if gen_err:
+                print(f"  [{i:2}/{len(cases)}] [生成失败] {case['question'][:32]}")
+                logger.warning(f"[{i}/{len(cases)}] {case['id']} 生成失败：{gen_err}")
+            else:
+                print(f"  [{i:2}/{len(cases)}] in={rec['prompt_tokens']:>5} cache={cache:>5} "
+                      f"{lat:>5.1f}s  {case['question'][:32]}")
+                logger.info(f"[{i}/{len(cases)}] {case['id']} [{case['type']}] "
+                            f"input={rec['prompt_tokens']}(缓存{cache}) 延迟={lat}s "
+                            f"{'冷启动' if rec['cold'] else '缓存命中'}")
 
     # ── 阶段 2：并行裁判 ──
-    print("\n裁判中...")
+    # 生成失败的记录没有答案可判，直接跳过（它的 gen_error 已经记下了）
+    todo = [r for r in records if not r.get("gen_error")]
+    n_gen_fail = len(records) - len(todo)
+    print(f"\n裁判中...（跳过 {n_gen_fail} 条生成失败）")
     sem = asyncio.Semaphore(JUDGE_CONCURRENCY)
-    await asyncio.gather(*[judge_one(r, sem) for r in records])
+    await asyncio.gather(*[judge_one(r, sem) for r in todo])
 
     # ── 汇总 ──
     from collections import defaultdict
     by = defaultdict(list)
     for r in records:
-        if not r.get("judge_error"):
+        if not r.get("judge_error") and not r.get("gen_error"):
             by[r["type"]].append(r)
 
     print("\n" + "=" * 88)
@@ -191,10 +209,16 @@ async def main():
     print(f"      平均延迟 {cost['avg_latency_s']}s | 总 input {cost['total_prompt_tokens']:,}")
 
     fails = [r for r in records if r.get("judge_error")]
-    json.dump({"summary": summary, "cost": cost, "judge_failures": len(fails),
+    json.dump({"summary": summary, "cost": cost,
+               "judge_failures": len(fails), "gen_failures": n_gen_fail,
                "records": [{k: v for k, v in r.items() if k != "context"} for r in records]},
               open(OUT, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-    print(f"\n耗时 {(time.time()-t0)/60:.1f} 分钟，明细已存 {OUT}" + (f"（裁判失败 {len(fails)}）" if fails else ""))
+    note = ""
+    if n_gen_fail:
+        note += f"（生成失败 {n_gen_fail}）"
+    if fails:
+        note += f"（裁判失败 {len(fails)}）"
+    print(f"\n耗时 {(time.time()-t0)/60:.1f} 分钟，明细已存 {OUT}{note}")
 
 
 if __name__ == "__main__":

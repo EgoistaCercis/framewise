@@ -111,8 +111,15 @@ async def run_video(video: dict, limit: int, sem_f: asyncio.Semaphore) -> list[d
         msgs.append({"role": "user", "content": case["question"]})
 
         t1 = time.time()
-        ans, usage = await llm_chat(messages=msgs, system_prompt=SYSTEM_PROMPT,
-                                    max_tokens=LLM_MAX_TOKENS)
+        gen_err = None
+        try:
+            ans, usage = await llm_chat(messages=msgs, system_prompt=SYSTEM_PROMPT,
+                                        max_tokens=LLM_MAX_TOKENS)
+        except Exception as e:
+            # 不兜住会让整场评测崩掉（外层 gather 没开 return_exceptions）；
+            # 视频级并行后一处异常的代价比串行时更大
+            gen_err = f"{type(e).__name__}: {str(e)[:200]}"
+            ans, usage = f"[LLM 异常] {gen_err}", {}
         lat = round(time.time() - t1, 2)
 
         ctx = transcript + ("\n\n" + frame_msg if frame_msg else "")
@@ -120,7 +127,7 @@ async def run_video(video: dict, limit: int, sem_f: asyncio.Semaphore) -> list[d
             "id": case["id"], "type": case["type"], "question": case["question"],
             "reference_answer": case["reference_answer"], "answer": ans,
             "context": ctx, "frame_ts": fr["ts"], "frame_ok": bool(fr["desc"]),
-            "frame_error": fr["error"], "latency_s": lat,
+            "frame_error": fr["error"], "gen_error": gen_err, "latency_s": lat,
             "prompt_tokens": usage.get("prompt_tokens", 0),
             "completion_tokens": usage.get("completion_tokens", 0),
             "cached_tokens": usage.get("cached_tokens", 0),
@@ -128,11 +135,15 @@ async def run_video(video: dict, limit: int, sem_f: asyncio.Semaphore) -> list[d
             "_ts": case["time_start"], "_te": case["time_end"],
         }
         recs.append(rec)
-        print(f"{tag} [{i:2}/{len(cases)}] in={rec['prompt_tokens']:>5} "
-              f"cache={rec['cached_tokens']:>5} {lat:>5.1f}s {case['question'][:26]}")
-        logger.info(f"[{i}/{len(cases)}] {case['id']} [{case['type']}] "
-                    f"抽帧ts={fr['ts']:.0f}s {'成功' if fr['desc'] else '失败: ' + str(fr['error'])[:60]} "
-                    f"input={rec['prompt_tokens']}(缓存{rec['cached_tokens']}) 延迟={lat}s")
+        if gen_err:
+            print(f"{tag} [{i:2}/{len(cases)}] [生成失败] {case['question'][:26]}")
+            logger.warning(f"[{i}/{len(cases)}] {case['id']} 生成失败：{gen_err}")
+        else:
+            print(f"{tag} [{i:2}/{len(cases)}] in={rec['prompt_tokens']:>5} "
+                  f"cache={rec['cached_tokens']:>5} {lat:>5.1f}s {case['question'][:26]}")
+            logger.info(f"[{i}/{len(cases)}] {case['id']} [{case['type']}] "
+                        f"抽帧ts={fr['ts']:.0f}s {'成功' if fr['desc'] else '失败: ' + str(fr['error'])[:60]} "
+                        f"input={rec['prompt_tokens']}(缓存{rec['cached_tokens']}) 延迟={lat}s")
     return recs
 
 
@@ -163,15 +174,18 @@ async def main():
     results = await asyncio.gather(*[guarded(v) for v in videos])
     records = [r for rs in results for r in rs]
 
-    print("\n裁判中...")
+    # 生成失败的记录没有答案可判，直接跳过
+    todo = [r for r in records if not r.get("gen_error")]
+    n_gen_fail = len(records) - len(todo)
+    print(f"\n裁判中...（跳过 {n_gen_fail} 条生成失败）")
     sem = asyncio.Semaphore(JUDGE_CONCURRENCY)
-    await asyncio.gather(*[judge_one(r, sem) for r in records])
+    await asyncio.gather(*[judge_one(r, sem) for r in todo])
 
     # ── 汇总 ──
     from collections import defaultdict
     by = defaultdict(list)
     for r in records:
-        if not r.get("judge_error"):
+        if not r.get("judge_error") and not r.get("gen_error"):
             by[r["type"]].append(r)
 
     print("\n" + "=" * 88)
@@ -210,7 +224,8 @@ async def main():
           f"（缓存 {cost['avg_cached_tokens']:.0f}）| 平均延迟 {cost['avg_latency_s']}s")
 
     fails = [r for r in records if r.get("judge_error")]
-    json.dump({"summary": summary, "cost": cost, "judge_failures": len(fails),
+    json.dump({"summary": summary, "cost": cost,
+               "judge_failures": len(fails), "gen_failures": n_gen_fail,
                "records": [{k: v for k, v in r.items() if k != "context"} for r in records]},
               open(OUT, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
     print(f"\n耗时 {(time.time()-t0)/60:.1f} 分钟，已存 {OUT}")

@@ -9,7 +9,14 @@ import re
 
 
 def _extract_json(text: str) -> dict:
-    """从 LLM 输出里稳健地抠出 JSON"""
+    """从 LLM 输出里稳健地抠出 JSON。
+
+    解析失败**必须抛错**，不能返回 `{}` —— 后者会让 `r.get("score", 0.0)`
+    静默落成 0 分，把「裁判没看懂」伪装成「回答不忠实」，而且不会进
+    `judge_failures` 统计。这是踩坑记录 #5（裁判静默失败）的同类残留：
+    当时只修了「输出为空」那一半，「有输出但抠不出 JSON」这一半漏了。
+    """
+    raw = text
     text = text.strip()
     m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
     if m:
@@ -20,8 +27,8 @@ def _extract_json(text: str) -> dict:
             text = m.group(0)
     try:
         return json.loads(text)
-    except json.JSONDecodeError:
-        return {}
+    except json.JSONDecodeError as e:
+        raise ValueError(f"抠不出 JSON（{e}）；原文前 120 字：{raw[:120]!r}") from e
 
 
 FAITHFULNESS_PROMPT = """你是严格的评测员，判断「回答」中的每个陈述是否能在「参考材料」中找到依据。
@@ -65,9 +72,15 @@ JUDGE_MAX_TOKENS = 6000
 
 
 async def _ask(system: str, user: str, max_tokens: int = JUDGE_MAX_TOKENS) -> dict:
-    """调用 judge，空输出时梯度加大 max_tokens 重试（推理会吃 token）"""
+    """调用 judge，梯度加大 max_tokens 重试。
+
+    两种失败都要重试，而且**最终必须显式报错**（走 judge_error 通道），
+    绝不静默返回 0 分：
+    - 输出为空：推理把 token 吃光了（踩坑记录 #5）
+    - 有输出但抠不出 JSON：裁判写了散文没按格式（同类残留，2026-09-13 补修）
+    """
     from backend.services.llm.gateway import chat
-    last_usage = {}
+    last_err = "judge 未产生任何有效输出"
     for mt in (max_tokens, max_tokens * 2, 16000):
         ans, usage = await chat(
             messages=[{"role": "user", "content": user}],
@@ -75,11 +88,15 @@ async def _ask(system: str, user: str, max_tokens: int = JUDGE_MAX_TOKENS) -> di
             temperature=0.0,
             max_tokens=mt,
         )
-        last_usage = usage
-        if ans.strip():
+        if not ans.strip():
+            last_err = f"输出为空（reasoning 吃光 token）：{usage}"
+            continue
+        try:
             return _extract_json(ans)
-    # 三次都空：显式报错，不静默当 0 分
-    raise RuntimeError(f"judge 返回空内容（reasoning 吃光 token）：{last_usage}")
+        except ValueError as e:
+            last_err = str(e)
+            continue
+    raise RuntimeError(f"judge 判定失败（已重试 3 次）：{last_err}")
 
 
 # 参考材料的截断上限。注意：全量字幕方案下 context = 完整字幕（可达 1 万字），
@@ -88,18 +105,29 @@ async def _ask(system: str, user: str, max_tokens: int = JUDGE_MAX_TOKENS) -> di
 CONTEXT_LIMIT = 24000
 
 
+def _score_of(r: dict, key: str = "score") -> float:
+    """取分数字段；缺字段就抛错。
+
+    JSON 解析成功不等于内容合规——裁判可能给出 `{"reason": "..."}` 而漏掉 score。
+    这时用 `.get(key, 0.0)` 又会静默变成 0 分，等于换个姿势重犯同一个错。
+    """
+    if key not in r:
+        raise ValueError(f"judge 输出缺少字段 {key!r}：{r}")
+    return float(r[key])
+
+
 async def judge_faithfulness(context: str, answer: str) -> dict:
     """忠实度：回答是否忠于参考材料（不编造）"""
     r = await _ask(FAITHFULNESS_PROMPT,
                    f"【参考材料】\n{context[:CONTEXT_LIMIT]}\n\n【回答】\n{answer}")
-    return {"score": float(r.get("score", 0.0)), "unsupported": r.get("unsupported", [])}
+    return {"score": _score_of(r), "unsupported": r.get("unsupported", [])}
 
 
 async def judge_relevancy(question: str, reference: str, answer: str) -> dict:
     """相关性：是否切题、与标准答案语义一致"""
     r = await _ask(RELEVANCY_PROMPT,
                    f"【问题】\n{question}\n\n【标准答案】\n{reference}\n\n【回答】\n{answer}")
-    return {"score": float(r.get("score", 0.0)), "reason": r.get("reason", "")}
+    return {"score": _score_of(r), "reason": r.get("reason", "")}
 
 
 async def _one_refusal_vote(question: str, answer: str) -> bool:

@@ -68,18 +68,24 @@ async def one_case(case: dict, video_id: str, index, meta, sem: asyncio.Semaphor
 
     async with sem:
         t0 = time.time()
-        emb = await embed_single(case["question"], video_id=video_id)
-        hits = search(index, meta, emb, top_k=TOP_K)
-        context = "\n\n".join(
-            f"【{_fmt(r['chunk']['start_time'])}~{_fmt(r['chunk']['end_time'])}】{r['chunk']['text']}"
-            for r in hits
-        )
-        prompt = build_prompt(case["question"], hits)
-        answer, usage = await chat(
-            messages=[{"role": "user", "content": prompt}],
-            system_prompt=SYSTEM_PROMPT,
-            max_tokens=LLM_MAX_TOKENS,
-        )
+        gen_err = None
+        # 生成段必须兜住：外层 gather 没开 return_exceptions，一次抖动会毁掉整场跑批
+        try:
+            emb = await embed_single(case["question"], video_id=video_id)
+            hits = search(index, meta, emb, top_k=TOP_K)
+            context = "\n\n".join(
+                f"【{_fmt(r['chunk']['start_time'])}~{_fmt(r['chunk']['end_time'])}】{r['chunk']['text']}"
+                for r in hits
+            )
+            prompt = build_prompt(case["question"], hits)
+            answer, usage = await chat(
+                messages=[{"role": "user", "content": prompt}],
+                system_prompt=SYSTEM_PROMPT,
+                max_tokens=LLM_MAX_TOKENS,
+            )
+        except Exception as e:
+            gen_err = f"{type(e).__name__}: {str(e)[:200]}"
+            context, answer, usage = "", f"[LLM 异常] {gen_err}", {}
         latency = time.time() - t0
 
         rec = {
@@ -88,9 +94,17 @@ async def one_case(case: dict, video_id: str, index, meta, sem: asyncio.Semaphor
             "answer": answer, "latency_s": round(latency, 2),
             "tokens": usage.get("total_tokens", 0),
             "time_range": [case["time_start"], case["time_end"]],
+            # ★ 持久化检索到的片段：retry_failed 重判时直接复用，
+            #   否则重判会重新检索一遍，评的是"现在检索到的片段"而不是
+            #   "当初生成答案时用的片段"——索引/字幕一变就完全不可比
+            "context": context,
+            "gen_error": gen_err,
         }
 
         rec["judge_error"] = None
+        if gen_err:
+            # 没有答案可判，直接返回（gen_error 已记录，统计会跳过它）
+            return rec
         try:
             if case["type"] == "unanswerable":
                 # 无依据题：看是否拒答
@@ -139,7 +153,10 @@ async def main():
         recs = await asyncio.gather(*[one_case(c, vid, index, meta, sem) for c in cases])
         for rec in recs:
             q = rec["question"][:36]
-            if rec.get("judge_error"):
+            if rec.get("gen_error"):
+                print(f"  [生成失败] {q}")
+                logger.warning(f"生成失败 {rec['id']}: {rec['gen_error'][:80]}")
+            elif rec.get("judge_error"):
                 print(f"  [裁判失败] {q}")
                 logger.warning(f"裁判失败 {rec['id']}: {rec['judge_error'][:80]}")
             elif rec["type"] == "unanswerable":
@@ -163,11 +180,15 @@ async def main():
         by[r["type"]].append(r)
 
     err = [r for r in records if r.get("judge_error")]
+    gen_fail = [r for r in records if r.get("gen_error")]
+    if gen_fail:
+        print(f"[警告] {len(gen_fail)} 条生成失败（已从统计中剔除）")
     if err:
         print(f"[警告] {len(err)} 条裁判失败（已从统计中剔除）")
 
     for t in ("single_hop", "multi_hop", "joint", "visual_only", "unanswerable"):
-        rs = [r for r in by.get(t, []) if not r.get("judge_error")]
+        rs = [r for r in by.get(t, [])
+              if not r.get("judge_error") and not r.get("gen_error")]
         if not rs:
             continue
         n = len(rs)
@@ -190,7 +211,8 @@ async def main():
     elapsed = time.time() - t0
     total_tokens = sum(r.get("tokens", 0) for r in records)
     json.dump({"summary": summary, "records": records,
-               "elapsed_s": round(elapsed, 1), "total_tokens": total_tokens},
+               "elapsed_s": round(elapsed, 1), "total_tokens": total_tokens,
+               "judge_failures": len(err), "gen_failures": len(gen_fail)},
               open(OUT, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
     print("=" * 78)
     print(f"耗时 {elapsed:.1f}s，总 token {total_tokens}，明细已存 {OUT}")
