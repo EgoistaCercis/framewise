@@ -19,6 +19,7 @@
 import asyncio
 import random
 
+from loguru import logger
 from openai import (
     AsyncOpenAI,
     APIError,
@@ -169,6 +170,56 @@ def _vision_usage(usage) -> dict:
     return d
 
 
+# ── 用量记账（网关层统一收口）─────────────────────────────
+# 记账放在网关，而不是散在各个调用方。网关是所有模型调用的唯一入口，
+# 放这里才有「新增调用路径自动入账」的效果。
+#
+# 之前的做法是让调用方自己调 log_usage，结果：只有 Agent 路径、视觉、嵌入、ASR
+# 各自记了，而**走 gateway.chat 直连的调用（V1/V2/V3 的作答、以及所有评测的裁判）
+# 从来没进过账**——成本分析里它们是完全隐形的。
+def _record(cfg: dict, call_type: str, *, input_tokens: int = 0,
+            output_tokens: int = 0, cached_tokens: int = 0,
+            reasoning_tokens: int = 0, video_id: str = None) -> None:
+    """把一次调用的用量写进 usage.db。
+
+    记账失败绝不能让模型调用跟着失败，所以整体包 try —— 用量统计是附属功能，
+    不能因为写库出错就打断用户正在进行的问答。
+    """
+    try:
+        from backend.services.llm.cost_service import log_usage
+        log_usage(
+            model=cfg["model"], provider=cfg["provider"], call_type=call_type,
+            input_tokens=input_tokens, output_tokens=output_tokens,
+            cached_tokens=cached_tokens, reasoning_tokens=reasoning_tokens,
+            video_id=video_id,
+        )
+    except Exception as e:
+        logger.warning(f"[Cost] 用量记账失败（不影响本次调用）: {e}")
+
+
+def _record_usage(cfg: dict, call_type: str, usage: dict, video_id: str = None) -> None:
+    """把 API 返回的 usage 归一化后记账"""
+    if not usage:
+        return
+    _record(
+        cfg, call_type,
+        input_tokens=usage.get("prompt_tokens", 0) or 0,
+        output_tokens=usage.get("completion_tokens", 0) or 0,
+        cached_tokens=usage.get("cached_tokens", 0) or 0,
+        reasoning_tokens=usage.get("reasoning_tokens", 0) or 0,
+        video_id=video_id,
+    )
+
+
+def _record_text_estimate(cfg: dict, call_type: str, text_chars: int,
+                          video_id: str = None) -> None:
+    """embedding / ASR 不返回 usage，按字符数估算 token（约 2 字符 = 1 token）。
+
+    估算规则本来就该跟着调用走——放在网关就不必每个调用方各写一遍。
+    """
+    _record(cfg, call_type, input_tokens=text_chars // 2, video_id=video_id)
+
+
 # ── 错误翻译：openai 异常 → 中文提示 ───────────────────────
 def translate_error(e: Exception, provider: str = "") -> str:
     """将 openai SDK 异常翻译为用户友好的中文提示"""
@@ -194,10 +245,11 @@ def translate_error(e: Exception, provider: str = "") -> str:
 # ═══════════════════════════════════════════════════════
 async def chat(messages: list[dict], system_prompt: str = None,
                temperature: float = 0.7, max_tokens: int = None,
-               smart: bool = False) -> tuple[str, dict]:
+               smart: bool = False, video_id: str = None) -> tuple[str, dict]:
     """调用 LLM 对话，返回 (回答文本, usage信息)
 
     smart=True 时使用独立的高阶模型（config.SMART_LLM_*，厂家可不同）。
+    video_id 仅用于把用量归到某个视频（可选；不传则只记总量）。
     """
     if max_tokens is None:
         max_tokens = config.LLM_MAX_TOKENS
@@ -220,14 +272,17 @@ async def chat(messages: list[dict], system_prompt: str = None,
             desc="chat",
         )
         answer = resp.choices[0].message.content or ""
-        return answer, _usage_to_dict(resp.usage)
+        usage = _usage_to_dict(resp.usage)
+        _record_usage(cfg, "chat", usage, video_id)
+        return answer, usage
     except Exception as e:
         raise RuntimeError(translate_error(e, cfg["provider"])) from e
 
 
 async def chat_with_tools(messages: list[dict], system_prompt: str = None,
                           tools: list[dict] = None, temperature: float = 0.7,
-                          max_tokens: int = None, smart: bool = False) -> tuple[dict, dict]:
+                          max_tokens: int = None, smart: bool = False,
+                          video_id: str = None) -> tuple[dict, dict]:
     """支持 function calling 的 LLM 对话。
 
     参数:
@@ -265,14 +320,16 @@ async def chat_with_tools(messages: list[dict], system_prompt: str = None,
                 for tc in (msg.tool_calls or [])
             ],
         }
-        return message, _usage_to_dict(resp.usage)
+        usage = _usage_to_dict(resp.usage)
+        _record_usage(cfg, "chat", usage, video_id)
+        return message, usage
     except Exception as e:
         raise RuntimeError(translate_error(e, cfg["provider"])) from e
 
 
 async def chat_stream(messages: list[dict], system_prompt: str = None,
                       temperature: float = 0.7, max_tokens: int = None,
-                      smart: bool = False):
+                      smart: bool = False, video_id: str = None):
     """流式 LLM 对话，异步 yield 每个 token 文本
 
     smart=True 时使用独立的高阶模型。
@@ -296,22 +353,31 @@ async def chat_stream(messages: list[dict], system_prompt: str = None,
                 temperature=temperature,
                 max_tokens=max_tokens,
                 stream=True,
+                # 原来没带这个，OpenAI 兼容流式默认不返回 usage，
+                # 导致所有流式调用（即产品的默认交互路径）用量全丢
+                stream_options={"include_usage": True},
             ),
             desc="chat_stream",
         )
+        stream_usage = {}
         async for chunk in stream:
+            # 末块 choices 为空、只带 usage —— 必须在 continue 之前取
+            if getattr(chunk, "usage", None):
+                stream_usage = _usage_to_dict(chunk.usage)
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
             if delta and delta.content:
                 yield delta.content
+        _record_usage(cfg, "chat", stream_usage, video_id)
     except Exception as e:
         raise RuntimeError(translate_error(e, cfg["provider"])) from e
 
 
 async def chat_with_tools_stream(messages: list[dict], system_prompt: str = None,
                                  tools: list[dict] = None, temperature: float = 0.7,
-                                 max_tokens: int = None, smart: bool = False):
+                                 max_tokens: int = None, smart: bool = False,
+                                 video_id: str = None):
     """流式 + tool calls 的 LLM 对话，yield 事件 dict。
 
     事件：
@@ -369,6 +435,7 @@ async def chat_with_tools_stream(messages: list[dict], system_prompt: str = None
             {"id": e["id"], "name": e["name"], "arguments": e["arguments"]}
             for _, e in sorted(tool_calls.items())
         ]
+        _record_usage(cfg, "chat", stream_usage, video_id)
         yield {"type": "done", "content": "".join(content_parts), "tool_calls": tc_list, "usage": stream_usage}
     except Exception as e:
         raise RuntimeError(translate_error(e, cfg["provider"])) from e
@@ -377,7 +444,8 @@ async def chat_with_tools_stream(messages: list[dict], system_prompt: str = None
 # ═══════════════════════════════════════════════════════
 # Embedding
 # ═══════════════════════════════════════════════════════
-async def embed(texts: list[str], provider: str = None) -> list[list[float]]:
+async def embed(texts: list[str], provider: str = None,
+                video_id: str = None) -> list[list[float]]:
     """调用 Embedding 模型，返回向量列表（自动分批）"""
     if not texts:
         return []
@@ -395,6 +463,8 @@ async def embed(texts: list[str], provider: str = None) -> list[list[float]]:
             )
             batch_results = sorted(resp.data, key=lambda x: x.index)
             all_embeddings.extend([item.embedding for item in batch_results])
+        # embedding 接口多数不返回 usage，按字符数估算
+        _record_text_estimate(cfg, "embedding", sum(len(t) for t in texts), video_id)
         return all_embeddings
     except Exception as e:
         raise RuntimeError(translate_error(e, cfg["provider"])) from e
@@ -404,7 +474,7 @@ async def embed(texts: list[str], provider: str = None) -> list[list[float]]:
 # Vision（OpenAI 兼容多模态）
 # ═══════════════════════════════════════════════════════
 async def vision(image_base64: str, prompt: str = None,
-                 provider: str = None) -> tuple[str, dict]:
+                 provider: str = None, video_id: str = None) -> tuple[str, dict]:
     """调用视觉模型分析图片，返回 (描述文本, usage信息)"""
     cfg = _service_cfg("vision")
     client = await _client(cfg)
@@ -427,7 +497,9 @@ async def vision(image_base64: str, prompt: str = None,
             desc="vision",
         )
         answer = resp.choices[0].message.content or ""
-        return answer, _vision_usage(resp.usage)
+        usage = _vision_usage(resp.usage)
+        _record_usage(cfg, "vision", usage, video_id)
+        return answer, usage
     except Exception as e:
         raise RuntimeError(translate_error(e, cfg["provider"])) from e
 
@@ -435,7 +507,8 @@ async def vision(image_base64: str, prompt: str = None,
 # ═══════════════════════════════════════════════════════
 # ASR（文件上传，OpenAI 兼容 /audio/transcriptions）
 # ═══════════════════════════════════════════════════════
-async def asr(audio_path: str, provider: str = None) -> list[dict]:
+async def asr(audio_path: str, provider: str = None,
+              video_id: str = None) -> list[dict]:
     """上传本地音频做语音转写，返回 [{text, start, end}, ...]"""
     import os
 
@@ -461,7 +534,10 @@ async def asr(audio_path: str, provider: str = None) -> list[dict]:
         except Exception as e:
             raise RuntimeError(translate_error(e, cfg["provider"])) from e
 
-    return _parse_subtitles(resp)
+    subtitles = _parse_subtitles(resp)
+    # ASR 接口不返回 usage，按转录文本字符数估算
+    _record_text_estimate(cfg, "asr", sum(len(s.get("text", "")) for s in subtitles), video_id)
+    return subtitles
 
 
 def _parse_subtitles(result) -> list[dict]:
@@ -512,7 +588,8 @@ def _parse_subtitles(result) -> list[dict]:
 # ═══════════════════════════════════════════════════════
 # ASR（URL 直传，DashScope 专有 SDK —— 无 OpenAI 对应物）
 # ═══════════════════════════════════════════════════════
-async def asr_url(audio_url: str, provider: str = None) -> list[dict]:
+async def asr_url(audio_url: str, provider: str = None,
+                  video_id: str = None) -> list[dict]:
     """通过 URL 调用 DashScope Paraformer（异步任务），返回 [{text, start, end}, ...]"""
     import dashscope
     from dashscope.audio.asr import Transcription
@@ -549,4 +626,10 @@ async def asr_url(audio_url: str, provider: str = None) -> list[dict]:
                     "start": round(sent.get("begin_time", 0) / 1000, 2),
                     "end": round(sent.get("end_time", 0) / 1000, 2),
                 })
+    # 本路径用 DashScope 专有 SDK、模型名为硬编码，故记账也用它自己的名字
+    # （不取 _service_cfg("asr")，那是文件上传路径的 ASR_MODEL，两者可能不同）
+    _record_text_estimate(
+        {"model": "paraformer-v2", "provider": "dashscope"},
+        "asr", sum(len(s["text"]) for s in subtitles), video_id,
+    )
     return subtitles

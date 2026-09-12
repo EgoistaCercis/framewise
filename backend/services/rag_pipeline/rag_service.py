@@ -358,37 +358,18 @@ async def _get_conversation_context(video_id: str) -> str:
 
 async def _call_deepseek(user_prompt: str, video_id: str = None,
                          system_prompt: str = None, smart: bool = False) -> str:
-    """调用 LLM（通过网关层），并记录 token 用量。
+    """调用 LLM（通过网关层）。用量记账由网关负责。
 
     smart=True 时使用独立的高阶模型（config.SMART_LLM_*，厂家可不同）。
     """
-    from backend.services.llm.cost_service import log_usage
     from backend.services.llm.gateway import chat
-    from backend.services.llm.provider_service import get_provider
-    from backend import config
-
     from backend.config import LLM_MAX_TOKENS
-    if smart and config.SMART_LLM_API_KEY:
-        model = config.SMART_LLM_MODEL
-        provider = config.SMART_LLM_PROVIDER
-    else:
-        provider, cfg = get_provider("chat")
-        model = cfg["model"]
-    answer, usage = await chat(
+
+    answer, _ = await chat(
         messages=[{"role": "user", "content": user_prompt}],
         system_prompt=system_prompt or SYSTEM_PROMPT,
         max_tokens=LLM_MAX_TOKENS,
         smart=smart,
-    )
-
-    log_usage(
-        model=model,
-        provider=provider,
-        call_type="chat",
-        input_tokens=usage.get("prompt_tokens", 0),
-        output_tokens=usage.get("completion_tokens", 0),
-        cached_tokens=usage.get("cached_tokens", 0),
-        reasoning_tokens=usage.get("reasoning_tokens", 0),
         video_id=video_id,
     )
 

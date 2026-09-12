@@ -837,6 +837,7 @@ async def ask_stream(video_id: str, req: AskRequest):
                 system_prompt=SYSTEM_PROMPT,
                 max_tokens=LLM_MAX_TOKENS,
                 smart=req.smart,
+                video_id=video_id,      # 记账在网关做，这里只传归因
             ):
                 full += token
                 yield f"data: {json.dumps({'token': token})}\n\n".encode()
@@ -1018,6 +1019,7 @@ async def ask_frame_stream(video_id: str, req: AskFrameRequest):
                 system_prompt=SYSTEM_PROMPT,
                 max_tokens=LLM_MAX_TOKENS,
                 smart=req.smart,
+                video_id=video_id,      # 记账在网关做，这里只传归因
             ):
                 full += token
                 yield f"data: {json.dumps({'token': token})}\n\n".encode()

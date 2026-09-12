@@ -61,24 +61,13 @@ async def analyze_frame(frame_path: str, video_id: str = None, prompt: str = Non
     import base64
     from backend.prompts import VISION_PROMPT
     from backend.services.llm.gateway import vision
-    from backend.services.llm.provider_service import get_provider
-    from backend.services.llm.cost_service import log_usage
 
     with open(frame_path, "rb") as f:
         image_data = base64.b64encode(f.read()).decode("utf-8")
 
-    provider, cfg = get_provider("vision")
-    description, usage = await vision(image_data, prompt=prompt or VISION_PROMPT)
-
-    log_usage(
-        model=cfg["model"],
-        provider=provider,
-        call_type="vision",
-        input_tokens=usage.get("input_tokens", 0),
-        output_tokens=usage.get("output_tokens", 0),
-        cached_tokens=usage.get("cached_tokens", 0),
-        reasoning_tokens=usage.get("reasoning_tokens", 0),
-        video_id=video_id,
+    # 用量记账由网关负责（原来这里自己调 log_usage，与网关收口后重复）
+    description, _ = await vision(
+        image_data, prompt=prompt or VISION_PROMPT, video_id=video_id,
     )
 
     logger.info(f"Frame analyzed: {description[:100]}...")

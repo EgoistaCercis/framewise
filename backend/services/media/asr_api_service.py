@@ -19,17 +19,10 @@ async def transcribe_via_upload(audio_path: str, api_key: str = None, base_url: 
 
     file_size = os.path.getsize(audio_path)
     logger.info(f"Uploading audio for ASR: {file_size / 1024 / 1024:.1f} MB")
+    # 用量记账由网关负责（含按转录文本字符数估算 token）
     subtitles = await asr(audio_path)
 
-    from backend.services.llm.provider_service import get_provider
-    provider, cfg = get_provider("asr")
-    from backend.services.llm.cost_service import log_usage
-    # 用转录文本字符数估算 token（而非音频字节数）
-    total_chars = sum(len(s.get("text", "")) for s in subtitles)
-    log_usage(model=cfg["model"], provider=provider, call_type="asr",
-              input_tokens=total_chars // 2, output_tokens=0)
-
-    logger.info(f"ASR complete: {len(subtitles)} segments via {provider}")
+    logger.info(f"ASR complete: {len(subtitles)} segments")
     return subtitles
 
 

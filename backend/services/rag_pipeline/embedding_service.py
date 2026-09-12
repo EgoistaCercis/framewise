@@ -4,8 +4,6 @@
 """
 from loguru import logger
 from backend.services.llm.gateway import embed
-from backend.services.llm.provider_service import get_provider
-from backend.services.llm.cost_service import log_usage
 from backend.config import SILICONFLOW_EMBEDDING_MODEL
 
 EMBEDDING_DIM = 1024  # BGE-M3 输出维度
@@ -15,21 +13,10 @@ async def embed_texts(texts: list[str], video_id: str = None) -> list[list[float
     if not texts:
         return []
 
-    provider, cfg = get_provider("embedding")
-    embeddings = await embed(texts)
+    # 用量记账由网关负责（按字符数估算的逻辑也挪过去了）
+    embeddings = await embed(texts, video_id=video_id)
 
-    # 记录用量（估算）
-    total_chars = sum(len(t) for t in texts)
-    log_usage(
-        model=cfg["model"],
-        provider=provider,
-        call_type="embedding",
-        input_tokens=total_chars // 2,
-        output_tokens=0,
-        video_id=video_id,
-    )
-
-    logger.info(f"Embedded {len(texts)} texts ({total_chars} chars)")
+    logger.info(f"Embedded {len(texts)} texts ({sum(len(t) for t in texts)} chars)")
     return embeddings
 
 
