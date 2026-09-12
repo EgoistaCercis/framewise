@@ -95,17 +95,31 @@ class RagAnswerTool(Tool):
 class AnalyzeFrameTool(Tool):
     """截取画面帧并做视觉理解"""
     name = "analyze_frame"
-    description = "当用户询问视频画面、视觉内容相关的问题时调用。截取指定时间点的画面帧并做视觉分析，返回画面描述。"
+    # timestamp 故意不做必填：模型本来就没有「当前在哪」的先验，
+    # 强制它给时间点 = 逼它从字幕猜位置（实测画面题 222 次调用只有 22% 命中答案区间，
+    # 最极端一题扫了 0~840s 共 44 次）。默认看用户暂停处才是它真正想要的语义。
+    description = (
+        "当用户询问视频画面、视觉内容相关的问题时调用，截取画面帧并做视觉分析。"
+        "**默认省略 timestamp，直接分析用户当前暂停的那一帧**——绝大多数画面问题问的就是当前画面。"
+        "只有在需要对比/回溯其他时间点的画面时，才显式传入 timestamp。"
+    )
     parameters = {
         "type": "object",
         "properties": {
-            "timestamp": {"type": "number", "description": "要分析的画面时间点（秒）"},
+            "timestamp": {
+                "type": "number",
+                "description": "要分析的画面时间点（秒）。省略则分析用户当前暂停的画面，推荐省略。",
+            },
         },
-        "required": ["timestamp"],
+        "required": [],
     }
 
-    async def run(self, context: dict, timestamp: float = 0.0, **kwargs) -> str:
+    async def run(self, context: dict, timestamp: float = None, **kwargs) -> str:
         from backend.services.media.vision_service import process_frame_question, analyze_frame
+
+        # 省略 timestamp 时对齐到用户暂停位置（原来默认 0.0，会去分析视频第一帧）
+        if timestamp is None:
+            timestamp = context.get("timestamp") or 0.0
 
         video_path = context.get("video_path")
         if video_path:

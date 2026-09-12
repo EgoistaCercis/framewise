@@ -409,16 +409,20 @@ async def vision(image_base64: str, prompt: str = None,
     cfg = _service_cfg("vision")
     client = await _client(cfg)
 
+    from backend.prompts import VISION_PROMPT
+
     content = [
         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}},
-        {"type": "text", "text": prompt or "请详细描述这张图片/视频帧中的内容。"},
+        {"type": "text", "text": prompt or VISION_PROMPT},
     ]
     try:
         resp = await _with_retry(
             lambda: client.chat.completions.create(
                 model=cfg["model"],
                 messages=[{"role": "user", "content": content}],
-                max_tokens=500,
+                # 提示词要求 200 字，实测仍会写到 ~250 token 撞上限；400 留出余量，
+                # 且因为 VISION_PROMPT 把关键信息排在前面，偶发截断也只丢尾部
+                max_tokens=400,
             ),
             desc="vision",
         )

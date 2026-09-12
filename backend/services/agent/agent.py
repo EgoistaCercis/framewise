@@ -98,6 +98,28 @@ async def _load_conversation_context(video_id: str) -> str:
         return ""
 
 
+def _fmt_ts(seconds: float) -> str:
+    s = max(0, int(seconds))
+    return f"{s // 60:02d}:{s % 60:02d}"
+
+
+def format_player_state(context: dict) -> str:
+    """把「用户在视频的哪个位置」告诉 Agent。
+
+    之前只在 context 里传了 timestamp、却没告诉模型，于是模型要调 analyze_frame
+    只能自己从字幕猜时间点——画面题的答案又恰恰不在字幕里，结果就是瞎扫全片
+    （实测：16 道画面题调了 222 次，只有 22% 落在答案区间，最极端一题扫 0~840s 共 44 次）。
+
+    作为独立消息注入而非写进 system prompt，与 <memory>/<conversation> 一致：
+    system prompt 保持稳定以命中前缀缓存。
+    """
+    ts = context.get("timestamp")
+    if ts is None:
+        return ""
+    return (f'<player_state>用户当前暂停在 {_fmt_ts(ts)}（第 {int(ts)} 秒）。'
+            f'若用户问的是"现在/当前"的画面，直接用这个位置。</player_state>')
+
+
 class Agent:
     """工具型 Agent，循环调用 LLM 与工具直到产出最终答案"""
 
@@ -106,6 +128,9 @@ class Agent:
         self.system_prompt = system_prompt or AGENT_SYSTEM_PROMPT
         self.max_iterations = max_iterations
         self.smart = smart
+        # 保存实际工具对象：执行时也要按这份列表查找，
+        # 否则传入自定义工具（如子类包装）会被全局注册表绕过
+        self.tools = list(tools) if tools else None
         self.tools_openai = get_tools_openai(tools)
         self.compress_agent = CompressAgent(smart=smart)
 
@@ -125,6 +150,10 @@ class Agent:
                 "role": "user",
                 "content": f"<conversation>\n{conv_ctx.strip()}\n</conversation>",
             })
+        # 播放位置放在最后（每轮都在变），不破坏前面稳定前缀的缓存
+        player = format_player_state(context)
+        if player:
+            messages.append({"role": "user", "content": player})
         messages.append({"role": "user", "content": user_message})
         return messages
 
@@ -297,11 +326,18 @@ class Agent:
             video_id=video_id,
         )
 
-    @staticmethod
-    async def _execute_tool(tool_call: dict, context: dict) -> str:
+    def find_tool(self, name: str):
+        """按名字取工具：优先用构造时传入的列表，再回退全局注册表"""
+        if self.tools:
+            for t in self.tools:
+                if t.name == name:
+                    return t
+        return get_tool(name)
+
+    async def _execute_tool(self, tool_call: dict, context: dict) -> str:
         """执行单个工具调用，返回结果文本（含错误处理）"""
         name = tool_call["name"]
-        tool = get_tool(name)
+        tool = self.find_tool(name)
         if tool is None:
             return f"未知工具：{name}"
 
