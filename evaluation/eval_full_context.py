@@ -102,6 +102,11 @@ async def main():
     args = ap.parse_args()
 
     dataset = json.load(open(DATASET, encoding="utf-8"))
+    from eval_logger import setup_eval_log
+    from loguru import logger
+    log_path = setup_eval_log("eval_full_context")
+    logger.info("=== V2 全量字幕注入评测开始 ===")
+    logger.info(f"评测日志: {log_path}")
     records, t0 = [], time.time()
 
     # ── 阶段 1：顺序生成回答（保证缓存命中）──
@@ -129,6 +134,9 @@ async def main():
             cache = rec["cached_tokens"]
             print(f"  [{i:2}/{len(cases)}] in={rec['prompt_tokens']:>5} cache={cache:>5} "
                   f"{lat:>5.1f}s  {case['question'][:32]}")
+            logger.info(f"[{i}/{len(cases)}] {case['id']} [{case['type']}] "
+                        f"input={rec['prompt_tokens']}(缓存{cache}) 延迟={lat}s "
+                        f"{'冷启动' if rec['cold'] else '缓存命中'}")
 
     # ── 阶段 2：并行裁判 ──
     print("\n裁判中...")

@@ -48,3 +48,6 @@ extension/帧知.png
 # 架构图等文档快照不提交，但保留 images 目录里的图片
 docs/*
 !docs/images/
+
+# 评测运行日志（运行产物，不入库）
+evaluation/logs/

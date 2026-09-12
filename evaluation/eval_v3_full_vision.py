@@ -32,7 +32,8 @@ from eval_full_context import format_transcript, _fmt  # noqa: E402
 DATASET = os.path.join(BASE, "evaluation", "dataset.json")
 OUT = os.path.join(BASE, "evaluation", "results_v3_full_vision.json")
 FRAME_CONCURRENCY = 3
-JUDGE_CONCURRENCY = 4
+JUDGE_CONCURRENCY = 6
+VIDEO_CONCURRENCY = 8     # 与 V4 保持一致，成本/缓存表现才可比
 
 
 def _first_ts(case: dict) -> float:
@@ -79,63 +80,88 @@ async def judge_one(rec: dict, sem: asyncio.Semaphore) -> dict:
         return rec
 
 
-async def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--limit", type=int, default=0)
-    args = ap.parse_args()
-
+async def run_video(video: dict, limit: int, sem_f: asyncio.Semaphore) -> list[dict]:
+    """跑一个视频：并行预抽帧 → 顺序问答（顺序是为了命中前缀缓存）"""
     from backend.main import video_states
     from backend.services.llm.gateway import chat as llm_chat
     from backend.prompts import SYSTEM_PROMPT
     from backend.config import LLM_MAX_TOKENS
+    from loguru import logger
+
+    vid, name = video["video_id"], video["name"]
+    tag = f"[{name[:12]}]"
+    state = video_states.get(vid, {})
+    transcript = format_transcript(vid)
+    cases = video["cases"][:limit] if limit else video["cases"]
+
+    ts_list = [_first_ts(c) for c in cases]
+    print(f"{tag} 抽帧中（{len(cases)} 题）…")
+    frames = await asyncio.gather(*[extract_one(vid, state, ts, sem_f) for ts in ts_list])
+    ok = sum(1 for f in frames if f["desc"])
+    print(f"{tag} 抽帧完成 {ok}/{len(frames)}，开始问答")
+
+    recs = []
+    for i, (case, fr) in enumerate(zip(cases, frames), 1):
+        frame_msg = ""
+        if fr["desc"]:
+            frame_msg = f'<current_frame time="{_fmt(fr["ts"])}">\n{fr["desc"]}\n</current_frame>'
+        msgs = [{"role": "user", "content": f"<transcript>\n{transcript}\n</transcript>"}]
+        if frame_msg:
+            msgs.append({"role": "user", "content": frame_msg})
+        msgs.append({"role": "user", "content": case["question"]})
+
+        t1 = time.time()
+        ans, usage = await llm_chat(messages=msgs, system_prompt=SYSTEM_PROMPT,
+                                    max_tokens=LLM_MAX_TOKENS)
+        lat = round(time.time() - t1, 2)
+
+        ctx = transcript + ("\n\n" + frame_msg if frame_msg else "")
+        rec = {
+            "id": case["id"], "type": case["type"], "question": case["question"],
+            "reference_answer": case["reference_answer"], "answer": ans,
+            "context": ctx, "frame_ts": fr["ts"], "frame_ok": bool(fr["desc"]),
+            "frame_error": fr["error"], "latency_s": lat,
+            "prompt_tokens": usage.get("prompt_tokens", 0),
+            "completion_tokens": usage.get("completion_tokens", 0),
+            "cached_tokens": usage.get("cached_tokens", 0),
+            "cold": (i == 1),
+            "_ts": case["time_start"], "_te": case["time_end"],
+        }
+        recs.append(rec)
+        print(f"{tag} [{i:2}/{len(cases)}] in={rec['prompt_tokens']:>5} "
+              f"cache={rec['cached_tokens']:>5} {lat:>5.1f}s {case['question'][:26]}")
+        logger.info(f"[{i}/{len(cases)}] {case['id']} [{case['type']}] "
+                    f"抽帧ts={fr['ts']:.0f}s {'成功' if fr['desc'] else '失败: ' + str(fr['error'])[:60]} "
+                    f"input={rec['prompt_tokens']}(缓存{rec['cached_tokens']}) 延迟={lat}s")
+    return recs
+
+
+async def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--videos", type=int, default=0)
+    args = ap.parse_args()
 
     dataset = json.load(open(DATASET, encoding="utf-8"))
-    records, t0 = [], time.time()
+    from eval_logger import setup_eval_log
+    from loguru import logger
+    log_path = setup_eval_log("eval_v3_full_vision")
+    logger.info("=== V3 全量字幕 + 固定视觉评测开始 ===")
+    logger.info(f"评测日志: {log_path}")
+    t0 = time.time()
 
-    for video in dataset["videos"]:
-        vid, name = video["video_id"], video["name"]
-        state = video_states.get(vid, {})
-        transcript = format_transcript(vid)
-        cases = video["cases"][: args.limit] if args.limit else video["cases"]
+    # 视频级并行；抽帧信号量全局共享，避免 8 个视频各自开 3 路把 ffmpeg 打满
+    sem_f = asyncio.Semaphore(FRAME_CONCURRENCY)
+    sem_v = asyncio.Semaphore(VIDEO_CONCURRENCY)
+    videos = dataset["videos"][: args.videos] if args.videos else dataset["videos"]
 
-        # ── 并行预抽帧 ──
-        ts_list = [_first_ts(c) for c in cases]
-        sem_f = asyncio.Semaphore(FRAME_CONCURRENCY)
-        print(f"--- {name}（{len(cases)} 题，抽帧中…）")
-        frames = await asyncio.gather(*[extract_one(vid, state, ts, sem_f) for ts in ts_list])
-        ok = sum(1 for f in frames if f["desc"])
-        print(f"    抽帧完成 {ok}/{len(frames)}")
+    async def guarded(v):
+        async with sem_v:
+            return await run_video(v, args.limit, sem_f)
 
-        # ── 顺序问答（保缓存）──
-        for i, (case, fr) in enumerate(zip(cases, frames), 1):
-            frame_msg = ""
-            if fr["desc"]:
-                frame_msg = f'<current_frame time="{_fmt(fr["ts"])}">\n{fr["desc"]}\n</current_frame>'
-            msgs = [{"role": "user", "content": f"<transcript>\n{transcript}\n</transcript>"}]
-            if frame_msg:
-                msgs.append({"role": "user", "content": frame_msg})
-            msgs.append({"role": "user", "content": case["question"]})
-
-            t1 = time.time()
-            ans, usage = await llm_chat(messages=msgs, system_prompt=SYSTEM_PROMPT,
-                                        max_tokens=LLM_MAX_TOKENS)
-            lat = round(time.time() - t1, 2)
-
-            ctx = transcript + ("\n\n" + frame_msg if frame_msg else "")
-            rec = {
-                "id": case["id"], "type": case["type"], "question": case["question"],
-                "reference_answer": case["reference_answer"], "answer": ans,
-                "context": ctx, "frame_ts": fr["ts"], "frame_ok": bool(fr["desc"]),
-                "frame_error": fr["error"], "latency_s": lat,
-                "prompt_tokens": usage.get("prompt_tokens", 0),
-                "completion_tokens": usage.get("completion_tokens", 0),
-                "cached_tokens": usage.get("cached_tokens", 0),
-                "cold": (i == 1),
-                "_ts": case["time_start"], "_te": case["time_end"],
-            }
-            records.append(rec)
-            print(f"  [{i:2}/{len(cases)}] in={rec['prompt_tokens']:>5} cache={rec['cached_tokens']:>5} "
-                  f"{lat:>5.1f}s {case['question'][:30]}")
+    print(f"并行跑 {len(videos)} 个视频（视频内顺序提问，保前缀缓存）…")
+    results = await asyncio.gather(*[guarded(v) for v in videos])
+    records = [r for rs in results for r in rs]
 
     print("\n裁判中...")
     sem = asyncio.Semaphore(JUDGE_CONCURRENCY)

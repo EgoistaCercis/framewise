@@ -120,6 +120,11 @@ async def main():
     from backend.services.rag_pipeline.vector_store import load_index
 
     dataset = json.load(open(DATASET, encoding="utf-8"))
+    from eval_logger import setup_eval_log
+    from loguru import logger
+    log_path = setup_eval_log("eval_generation")
+    logger.info("=== V1 生成层评测开始 ===")
+    logger.info(f"评测日志: {log_path}")
     sem = asyncio.Semaphore(CONCURRENCY)
     records = []
     t0 = time.time()
@@ -136,10 +141,15 @@ async def main():
             q = rec["question"][:36]
             if rec.get("judge_error"):
                 print(f"  [裁判失败] {q}")
+                logger.warning(f"裁判失败 {rec['id']}: {rec['judge_error'][:80]}")
             elif rec["type"] == "unanswerable":
                 print(f"  [{'拒答' if rec.get('refused') else '未拒答'}] {q}")
+                logger.info(f"{rec['id']} 拒答={rec.get('refused')} 票={rec.get('refusal_votes', '')}")
             else:
                 print(f"  [忠实{rec['faithfulness']:.1f} 相关{rec['relevancy']:.1f}] {q}")
+                logger.info(f"{rec['id']} [{rec['type']}] 忠实={rec['faithfulness']:.3f} "
+                            f"相关={rec['relevancy']:.3f} 引用准={rec.get('citation_accurate')} "
+                            f"延迟={rec['latency_s']}s tokens={rec.get('tokens', 0)}")
         records.extend(recs)
 
     # ── 汇总 ──

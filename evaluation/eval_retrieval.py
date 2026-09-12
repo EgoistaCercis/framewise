@@ -70,6 +70,11 @@ async def main():
     from backend.services.rag_pipeline.vector_store import load_index, search
 
     dataset = json.load(open(DATASET, encoding="utf-8"))
+    from eval_logger import setup_eval_log
+    from loguru import logger
+    log_path = setup_eval_log("eval_retrieval")
+    logger.info("=== V1 检索层评测开始 ===")
+    logger.info(f"评测日志: {log_path}")
     per_type = {}      # type -> {n, hit@k, mrr, widths}
     details = []
     t0 = time.time()
@@ -126,6 +131,8 @@ async def main():
             mark = "HIT " if rank else "MISS"
             cov = f" 覆盖{len(hit_segs)}/{n_seg}" if n_seg > 1 else ""
             print(f"  [{mark}] r={rank}{cov} {name[:14]:14} {t:13} {case['question'][:34]}")
+            logger.info(f"{mark} rank={rank} 覆盖{len(hit_segs)}/{n_seg} [{t}] "
+                        f"{case['id']} {case['question'][:50]}")
 
         print(f"--- {name} 完成")
 
