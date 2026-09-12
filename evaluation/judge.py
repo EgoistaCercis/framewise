@@ -181,13 +181,28 @@ async def judge_record(rec: dict) -> dict:
     return rec
 
 
+# 区间引用：12:35~13:08（裸写或带括号都认）
+_CITE_RANGE = r"(\d{1,2}):(\d{2})\s*[~～\-–—]\s*(\d{1,2}):(\d{2})"
+# 单点引用：只认被括号包起来的（【10:51】/ [10:51] / 【10:51 附近】）。
+# 不认裸写的 MM:SS —— 正文里 "3:5"、"1:2" 这类比例会大量误判成时间戳。
+_CITE_POINT = r"[【\[]\s*(\d{1,2}):(\d{2})\s*(?:附近|左右)?\s*[】\]]"
+
+
 def extract_citations(answer: str) -> list:
-    """从回答里抽出时间戳引用，如【12:35~13:08】→ [(755, 788)]"""
+    """从回答里抽出时间戳引用，返回 [(start_sec, end_sec), ...]。
+
+    区间引用 → (起, 止)；单点引用 → (t, t)。
+    原先只认 `MM:SS~MM:SS` 区间，单点写法（如【10:51 附近】）完全不计 ——
+    于是 citation_coverage 被系统性拉低，而且答得越"精确到一点"反而越吃亏。
+    """
     out = []
-    for m in re.finditer(r"(\d{1,2}):(\d{2})\s*[~～-]\s*(\d{1,2}):(\d{2})", answer):
+    for m in re.finditer(_CITE_RANGE, answer):
         a, b, c, d = (int(x) for x in m.groups())
         out.append((a * 60 + b, c * 60 + d))
-    return out
+    for m in re.finditer(_CITE_POINT, answer):
+        t = int(m.group(1)) * 60 + int(m.group(2))
+        out.append((t, t))
+    return sorted(out)
 
 
 def citation_hit(answer: str, ts, te) -> dict:

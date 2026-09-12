@@ -100,8 +100,22 @@ def main():
             _te = te if isinstance(te, list) else [te]
             if len(_ts) != len(_te):
                 problems.append(f"{e['name']} 第{n}题 start/end 长度不一致")
-            if any(v < 0 for v in _ts) or any(v < 0 for v in _te):
-                problems.append(f"{e['name']} 第{n}题时间戳为负: {ts}~{te}")
+            # unanswerable 题**本来就没有答案区间**，约定用 -1 作哨兵
+            # （评测侧靠"跳过负数区间"来排除它们参与检索指标）。
+            # 所以负数与区间检查都要先排除这一类，否则全是误报。
+            if t != "unanswerable":
+                if any(v < 0 for v in _ts) or any(v < 0 for v in _te):
+                    problems.append(f"{e['name']} 第{n}题时间戳为负: {ts}~{te}")
+                # 起止倒挂：脏数据会安静进数据集，之后所有指标都建在它上面。
+                # 本项目已经吃过一次「标注超出视频时长」的亏（见踩坑记录 #13），
+                # 能自动查的就别靠人看。
+                for s, en in zip(_ts, _te):
+                    if en <= s:
+                        problems.append(f"{e['name']} 第{n}题区间起止倒挂或为空: {s}~{en}")
+            if not str(q.get("question", "")).strip():
+                problems.append(f"{e['name']} 第{n}题问题为空")
+            if not str(q.get("reference_answer", "")).strip():
+                problems.append(f"{e['name']} 第{n}题标准答案为空")
             type_count[t] = type_count.get(t, 0) + 1
             cases.append({
                 "id": f"{video_id}_q{n}",

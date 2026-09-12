@@ -45,20 +45,36 @@ def _norm_ranges(ts, te) -> list:
 
 
 def _overlap(chunk: dict, s: float, e: float) -> bool:
-    """检索到的 chunk 与某个答案区间是否有交集"""
+    """宽松判据：chunk 与答案区间有交集即算命中。
+
+    ⚠️ 这个判据偏乐观：chunk 长达 ~48 秒，与答案区间**接触一秒**就算命中，
+    长 chunk 天然容易蹭到边界。保留它是为了和历史数字可比，
+    但**看结论请优先看 strict 版**（见 `_overlap_strict`）。
+    """
     return chunk["start_time"] <= e and chunk["end_time"] >= s
 
 
-def _hit_info(results: list, ranges: list) -> tuple:
+def _overlap_strict(chunk: dict, s: float, e: float) -> bool:
+    """严格判据：答案区间的**中点**落在 chunk 内（IR 里常用的相关性判定）。
+
+    比"有交集"苛刻得多——chunk 必须真正覆盖答案所在的位置，
+    而不是擦到边。两套判据一起报，既保留历史可比性，又能看出宽松判据虚高多少。
+    """
+    mid = (s + e) / 2
+    return chunk["start_time"] <= mid <= chunk["end_time"]
+
+
+def _hit_info(results: list, ranges: list, strict: bool = False) -> tuple:
     """返回 (首个命中的排名, 命中的片段索引集合)
 
     - 排名用于 MRR（第一个命中的位置）
     - 片段集合用于多片段覆盖率（multi_hop 是否每个片段都检索到了）
     """
+    hit_fn = _overlap_strict if strict else _overlap
     hit_segs, first_rank = set(), 0
     for i, r in enumerate(results, 1):
         for si, (s, e) in enumerate(ranges):
-            if _overlap(r["chunk"], s, e):
+            if hit_fn(r["chunk"], s, e):
                 hit_segs.add(si)
                 if first_rank == 0:
                     first_rank = i
@@ -98,9 +114,14 @@ async def main():
         # 批量 embedding，省调用
         embs = await embed_texts([c["question"] for c, _ in cases], video_id=vid)
 
+        # embed_texts 返回数量与输入不符时，zip 会静默截断/错配 ——
+        # 那样评测就跑在「题目 A 配 B 的向量」上，分数看着正常但完全无意义
+        assert len(embs) == len(cases), (
+            f"embed 数量不匹配：{len(embs)} != {len(cases)}（{name}）")
         for (case, ranges), emb in zip(cases, embs):
-            results = search(index, meta, emb, top_k=TOP_K)
+            results = await asyncio.to_thread(search, index, meta, emb, top_k=TOP_K)
             rank, hit_segs = _hit_info(results, ranges)
+            rank_s, _ = _hit_info(results, ranges, strict=True)
             n_seg = len(ranges)
             coverage = len(hit_segs) / n_seg
 
@@ -108,6 +129,7 @@ async def main():
             st = per_type.setdefault(t, {
                 "n": 0, "hit": {1: 0, 3: 0, 5: 0}, "mrr": 0.0, "width": 0.0,
                 "seg_total": 0, "seg_hit": 0, "full": 0,
+                "hit_s": {1: 0, 3: 0, 5: 0}, "mrr_s": 0.0,
             })
             st["n"] += 1
             st["width"] += sum(e - s for s, e in ranges)
@@ -118,12 +140,15 @@ async def main():
             for k in (1, 3, 5):
                 if rank and rank <= k:
                     st["hit"][k] += 1
+                if rank_s and rank_s <= k:
+                    st["hit_s"][k] += 1
             st["mrr"] += (1.0 / rank) if rank else 0.0
+            st["mrr_s"] += (1.0 / rank_s) if rank_s else 0.0
 
             details.append({
                 "id": case["id"], "video": name, "type": t,
                 "question": case["question"], "ranges": ranges,
-                "rank": rank, "segments": n_seg,
+                "rank": rank, "rank_strict": rank_s, "segments": n_seg,
                 "segments_hit": len(hit_segs), "coverage": round(coverage, 3),
                 "top1": [round(r["chunk"]["start_time"], 1) for r in results[:1]],
                 "top1_score": round(results[0]["score"], 3) if results else None,
@@ -141,7 +166,7 @@ async def main():
     # 汇总
     print("\n" + "=" * 92)
     print(f"{'类型':<14}{'n':>4}{'R@1':>8}{'R@3':>8}{'R@5':>8}{'MRR':>8}"
-          f"{'片段覆盖':>10}{'全片段命中':>12}{'区间宽':>8}")
+          f"{'片段覆盖':>10}{'全片段命中':>12}{'区间宽':>8}   ‖ {'严R@5':>7}{'严MRR':>7}")
     print("-" * 92)
     summary = {}
     for t, st in sorted(per_type.items()):
@@ -157,10 +182,14 @@ async def main():
             "segment_coverage": round(cov, 3),
             "full_segment_hit_rate": round(full, 3),
             "avg_width_s": round(st["width"] / n, 1),
+            # 严格判据（答案中点落在 chunk 内）——见 _overlap_strict 的说明
+            "strict_recall@5": round(st["hit_s"][5] / n, 3),
+            "strict_mrr": round(st["mrr_s"] / n, 3),
         }
         summary[t] = row
         print(f"{t:<14}{n:>4}{row['recall@1']:>8.3f}{row['recall@3']:>8.3f}{row['recall@5']:>8.3f}"
-              f"{row['mrr']:>8.3f}{cov:>10.3f}{full:>12.3f}{row['avg_width_s']:>8.1f}")
+              f"{row['mrr']:>8.3f}{cov:>10.3f}{full:>12.3f}{row['avg_width_s']:>8.1f}"
+              f"   ‖ {row['strict_recall@5']:>7.3f}{row['strict_mrr']:>7.3f}")
 
     # RAG 主战场（排除对照组 visual_only）
     main_types = ["single_hop", "multi_hop", "joint"]

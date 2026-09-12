@@ -152,7 +152,9 @@ async def run_video(video: dict, limit: int) -> list[dict]:
             ans = result["answer"]
             steps = result["steps"]
         except Exception as e:
-            ans, steps = f"[Agent 异常] {type(e).__name__}: {str(e)[:150]}", 0
+            # steps 记 None 而不是 0：0 会被算进平均值、把 avg_steps 拉低，
+            # 让「有多少题需要多步」这件事看起来比实际更好
+            ans, steps = f"[Agent 异常] {type(e).__name__}: {str(e)[:150]}", None
         lat = round(time.time() - t1, 2)
 
         # ★ 必须跨步求和。原来只取 box[0]（Agent 第一步）的 usage，
@@ -165,6 +167,13 @@ async def run_video(video: dict, limit: int) -> list[dict]:
         for fr in called:
             if fr.get("desc"):
                 ctx_parts.append(f'<frame time="{fr["ts"]}">\n{fr["desc"]}\n</frame>')
+            else:
+                # 失败的调用也要写进参考材料：否则回答里「工具不可用，因此无法确认」
+                # 这类**如实陈述**在材料里找不到依据，会被判成「无依据」而压低忠实度
+                # —— 越诚实反而分越低。原先这是个没写出来的隐性决定，现在显式化。
+                ctx_parts.append(
+                    f'<frame time="{fr["ts"]}" error="true">'
+                    f'截帧/分析失败：{fr.get("err") or "未知原因"}</frame>')
         rec = {
             "id": case["id"], "type": case["type"], "question": case["question"],
             "reference_answer": case["reference_answer"], "answer": ans,
@@ -285,11 +294,13 @@ async def main():
             f = sum(r["faithfulness"] for r in rs) / n
             rel = sum(r["relevancy"] for r in rs) / n
             acc = [r["citation_accurate"] for r in rs if r.get("has_citation")]
-            ar = sum(1 for a in acc if a) / len(acc) if acc else 0
+            ar = (sum(1 for a in acc if a) / len(acc)) if acc else None
+            ar_disp = "—" if ar is None else f"{ar:>10.3f}"
             row = {"n": n, "faithfulness": round(f, 3), "relevancy": round(rel, 3),
-                   "citation_accuracy": round(ar, 3), "vision_rate": round(vr, 3),
+                   "citation_accuracy": round(ar, 3) if ar is not None else None,
+                   "vision_rate": round(vr, 3),
                    "avg_latency_s": round(lat, 1)}
-            print(f"{t:<14}{n:>4}{f:>9.3f}{rel:>9.3f}{ar:>10.3f}{'—':>9}{vr:>12.3f}{lat:>8.1f}")
+            print(f"{t:<14}{n:>4}{f:>9.3f}{rel:>9.3f}{ar_disp}{'—':>9}{vr:>12.3f}{lat:>8.1f}")
         summary[t] = row
 
     total_vr = sum(1 for r in records if r["vision_called"]) / len(records)
@@ -298,7 +309,8 @@ async def main():
         "avg_cached_tokens": round(sum(r["cached_tokens"] for r in records) / len(records), 0),
         "avg_latency_s": round(sum(r["latency_s"] for r in records) / len(records), 1),
         "overall_vision_rate": round(total_vr, 3),
-        "avg_steps": round(sum(r["steps"] for r in records) / len(records), 2),
+        "avg_steps": round(sum(r["steps"] for r in records if r["steps"] is not None)
+                           / max(1, sum(1 for r in records if r["steps"] is not None)), 2),
     }
     print("-" * 96)
     print(f"整体视觉调用率 {total_vr*100:.0f}% | 平均步数 {cost['avg_steps']} | "
@@ -313,10 +325,18 @@ async def main():
         return dict(sorted(Counter(r["vision_count"] for r in rs).items()))
 
     all_counts = sorted(r["vision_count"] for r in records)
+
     def _pct(p):
+        """nearest-rank 分位数：第 ceil(n*p) 个值（1-indexed）。
+
+        原来用 int(n*p) 取下标，n 小时会系统性偏高 —— 比如 n=10、p=0.9 时
+        int(9.0)=9 直接取到最大值，于是「P90 = max」，分位数失去意义。
+        """
         if not all_counts:
             return 0
-        return all_counts[min(len(all_counts) - 1, int(len(all_counts) * p))]
+        import math
+        rank = max(1, math.ceil(len(all_counts) * p))
+        return all_counts[min(rank, len(all_counts)) - 1]
 
     vision_dist = {
         "overall": _dist(records),

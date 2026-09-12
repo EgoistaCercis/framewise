@@ -175,10 +175,11 @@ async def main():
             f = sum(r["faithfulness"] for r in rs) / n
             rel = sum(r["relevancy"] for r in rs) / n
             acc = [r["citation_accurate"] for r in rs if r.get("has_citation")]
-            ar = (sum(1 for a in acc if a) / len(acc)) if acc else 0
+            ar = (sum(1 for a in acc if a) / len(acc)) if acc else None
+            ar_disp = "—" if ar is None else f"{ar:>10.3f}"
             row = {"n": n, "faithfulness": round(f, 3), "relevancy": round(rel, 3),
-                   "citation_accuracy": round(ar, 3), "avg_latency_s": round(lat, 1)}
-            print(f"{t:<14}{n:>4}{f:>9.3f}{rel:>9.3f}{ar:>10.3f}{'—':>9}{lat:>10.1f}")
+                   "citation_accuracy": round(ar, 3) if ar is not None else None, "avg_latency_s": round(lat, 1)}
+            print(f"{t:<14}{n:>4}{f:>9.3f}{rel:>9.3f}{ar_disp}{'—':>9}{lat:>10.1f}")
         summary[t] = row
 
     # 成本

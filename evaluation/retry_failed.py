@@ -45,24 +45,16 @@ async def rejudge(rec: dict, case: dict, video_id: str, index, meta, sem) -> dic
                 from backend.services.rag_pipeline.embedding_service import embed_single
                 from backend.services.rag_pipeline.vector_store import search
                 emb = await embed_single(case["question"], video_id=video_id)
-                hits = search(index, meta, emb, top_k=TOP_K)
+                hits = await asyncio.to_thread(search, index, meta, emb, top_k=TOP_K)
                 context = "\n\n".join(
                     f"【{_fmt(r['chunk']['start_time'])}~{_fmt(r['chunk']['end_time'])}】{r['chunk']['text']}"
                     for r in hits
                 )
-            if case["type"] == "unanswerable":
-                j = await judge.judge_refusal(case["question"], rec["answer"])
-                rec["refused"] = j["refused"]
-                rec["refusal_reason"] = j["reason"]
-            else:
-                f = await judge.judge_faithfulness(context, rec["answer"])
-                r = await judge.judge_relevancy(case["question"], case["reference_answer"], rec["answer"])
-                c = judge.citation_hit(rec["answer"], case["time_start"], case["time_end"])
-                rec.update({
-                    "faithfulness": f["score"], "unsupported": f["unsupported"][:3],
-                    "relevancy": r["score"], "relevancy_reason": r["reason"],
-                    "has_citation": c["has_citation"], "citation_accurate": c["accurate"],
-                })
+            # 判定统一走 judge_record —— 这里原本是第四份复制品
+            rec["context"] = context
+            rec["_ts"] = case["time_start"]      # 评测记录里存的是 time_range，不是 _ts/_te
+            rec["_te"] = case["time_end"]
+            await judge.judge_record(rec)
             rec["judge_error"] = None
             print(f"  [重判成功] {rec['question'][:36]}")
         except Exception as e:
@@ -156,8 +148,9 @@ async def main():
             print(f"{t:<14}{row['n']:>4}{'—':>9}{'—':>9}{'—':>10}{'—':>10}{row['refusal_rate']:>9.3f}")
         else:
             ca = row.get("citation_accuracy")
+            ca_disp = "—" if ca is None else f"{ca:>10.3f}"   # None = 无人引用，不是 0 分
             print(f"{t:<14}{row['n']:>4}{row['faithfulness']:>9.3f}{row['relevancy']:>9.3f}"
-                  f"{row['citation_coverage']:>10.3f}{(ca if ca is not None else 0):>10.3f}{'—':>9}")
+                  f"{row['citation_coverage']:>10.3f}{ca_disp}{'—':>9}")
     print("=" * 78)
     print(f"仍有失败: {len(still)} 条")
 

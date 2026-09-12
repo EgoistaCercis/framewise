@@ -72,7 +72,7 @@ async def one_case(case: dict, video_id: str, index, meta, sem: asyncio.Semaphor
         # 生成段必须兜住：外层 gather 没开 return_exceptions，一次抖动会毁掉整场跑批
         try:
             emb = await embed_single(case["question"], video_id=video_id)
-            hits = search(index, meta, emb, top_k=TOP_K)
+            hits = await asyncio.to_thread(search, index, meta, emb, top_k=TOP_K)
             context = "\n\n".join(
                 f"【{_fmt(r['chunk']['start_time'])}~{_fmt(r['chunk']['end_time'])}】{r['chunk']['text']}"
                 for r in hits

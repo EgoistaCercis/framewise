@@ -113,7 +113,14 @@ async def run_video(video: dict, limit: int, sem_f: asyncio.Semaphore) -> list[d
             ans, usage = f"[LLM 异常] {gen_err}", {}
         lat = round(time.time() - t1, 2)
 
-        ctx = transcript + ("\n\n" + frame_msg if frame_msg else "")
+        ctx = transcript
+        if frame_msg:
+            ctx += "\n\n" + frame_msg
+        elif fr["error"]:
+            # 同 V4：截帧失败也要写进参考材料，否则「画面取不到所以无法确认」
+            # 这种如实回答会被判成无依据，越诚实分越低
+            ctx += (f'\n\n<frame time="{_fmt(fr["ts"])}" error="true">'
+                    f'截帧/分析失败：{fr["error"]}</frame>')
         rec = {
             "id": case["id"], "type": case["type"], "question": case["question"],
             "reference_answer": case["reference_answer"], "answer": ans,
@@ -196,10 +203,11 @@ async def main():
             f = sum(r["faithfulness"] for r in rs) / n
             rel = sum(r["relevancy"] for r in rs) / n
             acc = [r["citation_accurate"] for r in rs if r.get("has_citation")]
-            ar = sum(1 for a in acc if a) / len(acc) if acc else 0
+            ar = (sum(1 for a in acc if a) / len(acc)) if acc else None
+            ar_disp = "—" if ar is None else f"{ar:>10.3f}"
             row = {"n": n, "faithfulness": round(f, 3), "relevancy": round(rel, 3),
-                   "citation_accuracy": round(ar, 3), "avg_latency_s": round(lat, 1)}
-            print(f"{t:<14}{n:>4}{f:>9.3f}{rel:>9.3f}{ar:>10.3f}{'—':>9}{lat:>8.1f}")
+                   "citation_accuracy": round(ar, 3) if ar is not None else None, "avg_latency_s": round(lat, 1)}
+            print(f"{t:<14}{n:>4}{f:>9.3f}{rel:>9.3f}{ar_disp}{'—':>9}{lat:>8.1f}")
         summary[t] = row
 
     frame_fail = sum(1 for r in records if not r["frame_ok"])

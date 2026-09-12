@@ -202,6 +202,42 @@ def _vision_usage(usage) -> dict:
     return d
 
 
+# 流式是否带 stream_options（不带就拿不到 usage，成本记账会缺一大块）。
+# 个别 OpenAI 兼容厂商不认这个参数、直接 400（不可重试）。首次遇到就**永久降级**，
+# 避免每次请求都白试一遍 —— 这是「换厂商时的隐性断点」，降级时会 warning。
+_stream_usage_supported = True
+
+
+def _stream_opts() -> dict:
+    return {"stream_options": {"include_usage": True}} if _stream_usage_supported else {}
+
+
+def _degrade_stream_usage(e) -> None:
+    global _stream_usage_supported
+    if _stream_usage_supported:
+        _stream_usage_supported = False
+        logger.warning(
+            f"该厂商不接受 stream_options（{str(e)[:120]}），已永久降级："
+            f"后续流式调用将拿不到 usage，成本记账会缺失这部分用量"
+        )
+
+
+def _first_choice(resp, desc: str):
+    """取第一个 choice 的 message，为空时给出可读错误。
+
+    个别厂商在内容过滤/安全拦截时会返回 HTTP 200 但 `choices` 为空数组，
+    直接取 `[0]` 会变成 IndexError，再被 translate_error 包成一句含糊的
+    RuntimeError —— 排查时完全看不出是「被内容过滤」。
+    """
+    choices = getattr(resp, "choices", None)
+    if not choices:
+        raise RuntimeError(
+            f"{desc} 返回了空 choices —— 通常是被厂商的内容过滤/安全策略拦截，"
+            f"也可能是该厂商的协议不完全兼容"
+        )
+    return choices[0].message
+
+
 # ── 用量记账（网关层统一收口）─────────────────────────────
 # 记账放在网关，而不是散在各个调用方。网关是所有模型调用的唯一入口，
 # 放这里才有「新增调用路径自动入账」的效果。
@@ -303,7 +339,8 @@ async def chat(messages: list[dict], system_prompt: str = None,
             ),
             desc="chat",
         )
-        answer = resp.choices[0].message.content or ""
+        msg = _first_choice(resp, "chat")
+        answer = msg.content or ""
         usage = _usage_to_dict(resp.usage)
         _record_usage(cfg, "chat", usage, video_id)
         return answer, usage
@@ -344,7 +381,7 @@ async def chat_with_tools(messages: list[dict], system_prompt: str = None,
             ),
             desc="chat_with_tools",
         )
-        msg = resp.choices[0].message
+        msg = _first_choice(resp, "chat_with_tools")
         message = {
             "content": msg.content or "",
             "tool_calls": [
@@ -353,7 +390,7 @@ async def chat_with_tools(messages: list[dict], system_prompt: str = None,
             ],
         }
         usage = _usage_to_dict(resp.usage)
-        _record_usage(cfg, "chat", usage, video_id)
+        _record_usage(cfg, "chat_tools", usage, video_id)
         return message, usage
     except Exception as e:
         raise RuntimeError(translate_error(e, cfg["provider"])) from e
@@ -377,20 +414,20 @@ async def chat_stream(messages: list[dict], system_prompt: str = None,
         msgs.append({"role": "system", "content": system_prompt})
     msgs.extend(messages)
 
-    try:
-        stream = await _with_retry(
-            lambda: client.chat.completions.create(
-                model=cfg["model"],
-                messages=msgs,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                stream=True,
-                # 原来没带这个，OpenAI 兼容流式默认不返回 usage，
-                # 导致所有流式调用（即产品的默认交互路径）用量全丢
-                stream_options={"include_usage": True},
-            ),
-            desc="chat_stream",
+    def _mk(extra: dict):
+        return lambda: client.chat.completions.create(
+            model=cfg["model"], messages=msgs, temperature=temperature,
+            max_tokens=max_tokens, stream=True, **extra,
         )
+
+    try:
+        try:
+            # 不带 stream_options 的话，OpenAI 兼容流式默认不返回 usage，
+            # 所有流式调用（产品的默认交互路径）用量会全丢
+            stream = await _with_retry(_mk(_stream_opts()), desc="chat_stream")
+        except BadRequestError as e:
+            _degrade_stream_usage(e)
+            stream = await _with_retry(_mk({}), desc="chat_stream")
         stream_usage = {}
         async for chunk in stream:
             # 末块 choices 为空、只带 usage —— 必须在 continue 之前取
@@ -426,19 +463,18 @@ async def chat_with_tools_stream(messages: list[dict], system_prompt: str = None
         msgs.append({"role": "system", "content": system_prompt})
     msgs.extend(messages)
 
-    try:
-        stream = await _with_retry(
-            lambda: client.chat.completions.create(
-                model=cfg["model"],
-                messages=msgs,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                tools=tools or None,
-                stream=True,
-                stream_options={"include_usage": True},
-            ),
-            desc="chat_with_tools_stream",
+    def _mk(extra: dict):
+        return lambda: client.chat.completions.create(
+            model=cfg["model"], messages=msgs, temperature=temperature,
+            max_tokens=max_tokens, tools=tools or None, stream=True, **extra,
         )
+
+    try:
+        try:
+            stream = await _with_retry(_mk(_stream_opts()), desc="chat_with_tools_stream")
+        except BadRequestError as e:
+            _degrade_stream_usage(e)
+            stream = await _with_retry(_mk({}), desc="chat_with_tools_stream")
         content_parts = []
         tool_calls = {}  # index -> {"id", "name", "arguments"}
         stream_usage = {}
@@ -476,8 +512,7 @@ async def chat_with_tools_stream(messages: list[dict], system_prompt: str = None
 # ═══════════════════════════════════════════════════════
 # Embedding
 # ═══════════════════════════════════════════════════════
-async def embed(texts: list[str], provider: str = None,
-                video_id: str = None) -> list[list[float]]:
+async def embed(texts: list[str], video_id: str = None) -> list[list[float]]:
     """调用 Embedding 模型，返回向量列表（自动分批）"""
     if not texts:
         return []
@@ -485,6 +520,7 @@ async def embed(texts: list[str], provider: str = None,
     client = await _client(cfg)
 
     all_embeddings = []
+    real_tokens = 0        # 厂商若返回 usage 则用它，最后按真值记账
     batch_size = 32
     try:
         for i in range(0, len(texts), batch_size):
@@ -495,8 +531,14 @@ async def embed(texts: list[str], provider: str = None,
             )
             batch_results = sorted(resp.data, key=lambda x: x.index)
             all_embeddings.extend([item.embedding for item in batch_results])
-        # embedding 接口多数不返回 usage，按字符数估算
-        _record_text_estimate(cfg, "embedding", sum(len(t) for t in texts), video_id)
+            u = _usage_to_dict(getattr(resp, "usage", None))
+            if u.get("prompt_tokens"):
+                real_tokens += u["prompt_tokens"]
+        # 优先用接口返回的真值；只有厂商不返回 usage 时才按字符数估算
+        if real_tokens:
+            _record(cfg, "embedding", input_tokens=real_tokens, video_id=video_id)
+        else:
+            _record_text_estimate(cfg, "embedding", sum(len(t) for t in texts), video_id)
         return all_embeddings
     except Exception as e:
         raise RuntimeError(translate_error(e, cfg["provider"])) from e
@@ -506,7 +548,7 @@ async def embed(texts: list[str], provider: str = None,
 # Vision（OpenAI 兼容多模态）
 # ═══════════════════════════════════════════════════════
 async def vision(image_base64: str, prompt: str = None,
-                 provider: str = None, video_id: str = None) -> tuple[str, dict]:
+                 video_id: str = None) -> tuple[str, dict]:
     """调用视觉模型分析图片，返回 (描述文本, usage信息)"""
     cfg = _service_cfg("vision")
     client = await _client(cfg)
@@ -528,7 +570,7 @@ async def vision(image_base64: str, prompt: str = None,
             ),
             desc="vision",
         )
-        answer = resp.choices[0].message.content or ""
+        answer = _first_choice(resp, "vision").content or ""
         usage = _vision_usage(resp.usage)
         _record_usage(cfg, "vision", usage, video_id)
         return answer, usage
@@ -539,8 +581,7 @@ async def vision(image_base64: str, prompt: str = None,
 # ═══════════════════════════════════════════════════════
 # ASR（文件上传，OpenAI 兼容 /audio/transcriptions）
 # ═══════════════════════════════════════════════════════
-async def asr(audio_path: str, provider: str = None,
-              video_id: str = None) -> list[dict]:
+async def asr(audio_path: str, video_id: str = None) -> list[dict]:
     """上传本地音频做语音转写，返回 [{text, start, end}, ...]"""
     import os
 
@@ -567,8 +608,11 @@ async def asr(audio_path: str, provider: str = None,
             raise RuntimeError(translate_error(e, cfg["provider"])) from e
 
     subtitles = _parse_subtitles(resp)
-    # ASR 接口不返回 usage，按转录文本字符数估算
-    _record_text_estimate(cfg, "asr", sum(len(s.get("text", "")) for s in subtitles), video_id)
+    # ASR 接口不返回 usage。注意：转写文本是**输出**不是输入，
+    # 且 ASR 通常按音频时长计费、与 token 无对应关系 —— 这里只是给用量一个量级参考，
+    # 别拿它做严谨的成本核算（成本请以 usage.db 里的总价为准）。
+    _record(cfg, "asr", output_tokens=sum(len(s.get("text", "")) for s in subtitles) // 2,
+            video_id=video_id)
     return subtitles
 
 
@@ -620,8 +664,7 @@ def _parse_subtitles(result) -> list[dict]:
 # ═══════════════════════════════════════════════════════
 # ASR（URL 直传，DashScope 专有 SDK —— 无 OpenAI 对应物）
 # ═══════════════════════════════════════════════════════
-async def asr_url(audio_url: str, provider: str = None,
-                  video_id: str = None) -> list[dict]:
+async def asr_url(audio_url: str, video_id: str = None) -> list[dict]:
     """通过 URL 调用 DashScope Paraformer（异步任务），返回 [{text, start, end}, ...]"""
     import dashscope
     from dashscope.audio.asr import Transcription
@@ -684,9 +727,10 @@ async def asr_url(audio_url: str, provider: str = None,
                     "end": round(sent.get("end_time", 0) / 1000, 2),
                 })
     # 本路径用 DashScope 专有 SDK、模型名为硬编码，故记账也用它自己的名字
-    # （不取 _service_cfg("asr")，那是文件上传路径的 ASR_MODEL，两者可能不同）
-    _record_text_estimate(
-        {"model": "paraformer-v2", "provider": "dashscope"},
-        "asr", sum(len(s["text"]) for s in subtitles), video_id,
+    # （不取 _service_cfg("asr")，那是文件上传路径的 ASR_MODEL，两者可能不同）。
+    # 转写文本记进 output_tokens：它是输出；且 ASR 按音频时长计费，token 只是量级参考。
+    _record(
+        {"model": "paraformer-v2", "provider": "dashscope"}, "asr",
+        output_tokens=sum(len(s["text"]) for s in subtitles) // 2, video_id=video_id,
     )
     return subtitles
