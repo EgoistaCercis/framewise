@@ -17,7 +17,7 @@ from loguru import logger
 
 from backend.prompts import AGENT_SYSTEM_PROMPT
 from backend.services.agent.compress_agent import CompressAgent
-from backend.services.agent.tools import get_tools_openai, get_tool
+from backend.services.agent.tools import get_tools_openai, MAIN_TOOLS
 from backend.services.llm import gateway
 
 
@@ -259,8 +259,11 @@ class Agent:
                            tool_name=tc["name"])
                 yield {"type": "tool", "name": tc["name"]}
 
-                # 高危操作（覆盖文件、删除文件等）需用户确认
-                tool = get_tool(tc["name"])
+                # 高危操作（覆盖文件、删除文件等）需用户确认。
+                # 必须用 find_tool 而不是 get_tool：确认判断和实际执行要是**同一个对象**，
+                # 否则可能出现「拿 A 判断不用确认、却用 B 去执行」——
+                # 一个 requires_confirmation=True 的工具会被静默跳过确认。
+                tool = self.find_tool(tc["name"])
                 arguments = json.loads(tc["arguments"]) if tc["arguments"] else {}
                 if tool is not None and tool.requires_confirmation(**arguments):
                     message = tool.confirm_message(**arguments)
@@ -306,12 +309,21 @@ class Agent:
         return await self.compress_agent.compress(user_intent, tool_name, tool_result)
 
     def find_tool(self, name: str):
-        """按名字取工具：优先用构造时传入的列表，再回退全局注册表"""
-        if self.tools:
-            for t in self.tools:
-                if t.name == name:
-                    return t
-        return get_tool(name)
+        """按名字取工具。
+
+        搜索范围必须与「告诉模型有哪些工具」的那份**完全一致**（见 __init__ 里的
+        self.tools / get_tools_openai）。两者一旦不一致，就会出现：
+        - 模型被告知的工具，执行时查不到 → 调用失败
+        - 模型从没被告知的工具，执行时却查得到 → 越权（原来就是这个：
+          主 agent 能查到记忆工具，而记忆的增删改按设计只属于 MemoryAgent）
+
+        不传 tools 时回退 MAIN_TOOLS（与 get_tools_openai(None) 同一份列表），
+        而不是 _ALL_TOOLS —— 后者会把记忆工具也放进来。
+        """
+        for t in (self.tools or MAIN_TOOLS):
+            if t.name == name:
+                return t
+        return None
 
     async def _execute_tool(self, tool_call: dict, context: dict) -> str:
         """执行单个工具调用，返回结果文本（含错误处理）"""
