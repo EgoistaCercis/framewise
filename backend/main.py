@@ -169,9 +169,11 @@ async def health():
 async def llm_config():
     """返回 LLM 配置信息（不含密钥），供前端判断「智能模型」是否已配置"""
     from backend import config as _c
-    _smart_key = (_c.SMART_LLM_API_KEY or "").strip()
-    # 空值或占位符 your_key_here 均视为未配置
-    smart_configured = bool(_smart_key) and _smart_key != "your_key_here"
+    from backend.services.llm.gateway import _is_configured
+    # 判定收在网关的 _is_configured：空值或占位符 your_key_here 均视为未配置。
+    # 这里原先自己写了一份同样的判断，结果 UI 说"回落到默认模型"、
+    # 而网关的路由判定用的是真值判断，两边不一致（前端骗了用户）。
+    smart_configured = _is_configured(_c.SMART_LLM_API_KEY)
     return {
         "default_provider": _c.LLM_PROVIDER,
         "default_model": _c.LLM_MODEL,

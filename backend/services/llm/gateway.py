@@ -74,9 +74,26 @@ def _service_cfg(service: str) -> dict:
     raise ValueError(f"未支持的服务类型: {service}")
 
 
+def _is_configured(key: str) -> bool:
+    """API Key 是否**真正**配置了。
+
+    `your_key_here` 是 .env.example 里的占位符，用户很容易原样拷进 .env ——
+    它非空但无效，必须当成「未配置」，否则会拿占位符去请求（必然 401）。
+
+    这个约定原本只写在 main.py 的 UI 提示里，网关的路由判定用的是真值判断，
+    于是出现「UI 说本次回落到默认模型、网关却拿占位符去请求」的分裂。
+    收在这里，保证判定只有一处。
+    """
+    return bool(key) and key.strip() != "your_key_here"
+
+
 def _chat_cfg(smart: bool = False) -> dict:
-    """返回 chat 配置；smart=True 时使用独立的高阶模型（厂家可不同）"""
-    if smart and config.SMART_LLM_API_KEY:
+    """返回 chat 配置；smart=True 时使用独立的高阶模型（厂家可不同）
+
+    SMART_LLM_API_KEY 未配置（含占位符）时**回落默认模型** —— 与 config.py 的
+    注释和前端提示保持一致（前端会显示"智能模型未配置，本次仍使用默认模型"）。
+    """
+    if smart and _is_configured(config.SMART_LLM_API_KEY):
         return {
             "provider": config.SMART_LLM_PROVIDER,
             "base_url": _endpoint_to_base(config.SMART_LLM_ENDPOINT, "/chat/completions"),
@@ -92,24 +109,33 @@ def _chat_cfg(smart: bool = False) -> dict:
 
 
 # ── 客户端缓存（按 base_url 复用连接池）───────────────────
-_clients: dict[str, AsyncOpenAI] = {}
+_clients: dict[tuple, AsyncOpenAI] = {}
 _client_lock = asyncio.Lock()
 
 
 async def _client(cfg: dict) -> AsyncOpenAI:
-    """按 base_url 获取（并缓存）AsyncOpenAI 客户端，复用连接池"""
-    base = cfg["base_url"]
-    if base not in _clients:
+    """按 (base_url, api_key) 获取（并缓存）AsyncOpenAI 客户端，复用连接池。
+
+    **key 必须带 api_key**：同一个 base_url 完全可能配了不同的 key ——
+    `LLM_*` 与 `SMART_LLM_*` 指向同一厂商（如都用 deepseek），
+    chat 与 embedding 共用同一个兼容端点。只按 base_url 缓存的话，
+    后配置的一方会静默复用先入缓存的 client，**拿别人的 key 发请求**：
+    轻则鉴权失败，重则静默记到另一个账号，而症状看起来完全无关（401 / 配额错乱）。
+    """
+    key = (cfg["base_url"], cfg["api_key"])
+    if key not in _clients:
         async with _client_lock:
-            if base not in _clients:
-                if not cfg["api_key"]:
+            if key not in _clients:
+                # 占位符也当未配置：这里拦住能给出「去 .env 配置」的明确提示，
+                # 而不是让它发出去换回一个含糊的 401
+                if not _is_configured(cfg["api_key"]):
                     raise RuntimeError(f"{cfg['provider']} API Key 未配置，请在 .env 中设置")
-                _clients[base] = AsyncOpenAI(
-                    base_url=base,
+                _clients[key] = AsyncOpenAI(
+                    base_url=cfg["base_url"],
                     api_key=cfg["api_key"],
                     timeout=120.0,
                 )
-    return _clients[base]
+    return _clients[key]
 
 
 # ── 统一重试策略 ──────────────────────────────────────────
@@ -605,7 +631,10 @@ async def asr_url(audio_url: str, provider: str = None,
         file_urls=[audio_url],
         language_hints=["zh", "en"],
     )
-    result = Transcription.wait(task=task.output.task_id)
+    # Transcription.wait 是 DashScope SDK 的**同步阻塞轮询**，长视频要等好几分钟。
+    # 直接在事件循环里调用会把整个后端冻住——期间所有在线用户的对话全部卡死。
+    # （与评测侧给 ffmpeg 抽帧加 to_thread 是同一类问题，只是这个藏在 SDK 里）
+    result = await asyncio.to_thread(Transcription.wait, task=task.output.task_id)
     if result.status_code != HTTPStatus.OK:
         raise RuntimeError(f"ASR failed: {result.code} - {result.message}")
 
