@@ -31,6 +31,12 @@ def extract_frame_sync(video_path: str, timestamp: float, video_hash: str) -> st
         cache_path,
     ]
     subprocess.run(cmd, check=True, capture_output=True)
+    # ★ 必须验证产物真的生成了：ffmpeg 在 `-ss` 超出视频末尾时**返回码仍是 0、
+    #   但不写任何文件**。只看 check=True 会把不存在的路径当成功返回，
+    #   下游 open() 才炸，而且报错位置离真正的原因很远（表现为"缩图失败：文件不存在"）。
+    if not os.path.exists(cache_path):
+        raise RuntimeError(
+            f"截帧未产出文件（时间点 {timestamp}s 可能超出视频时长）：{cache_path}")
     logger.info(f"Frame extracted: {video_hash} @ {timestamp}s → {cache_path}")
     return cache_path
 

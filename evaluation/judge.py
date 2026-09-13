@@ -86,6 +86,7 @@ async def _ask(system: str, user: str, max_tokens: int = JUDGE_MAX_TOKENS,
     - 输出为空：推理把 token 吃光了（踩坑记录 #5）
     - 有输出但抠不出 JSON：裁判写了散文没按格式（同类残留，2026-09-13 补修）
     """
+    import asyncio as _aio
     from backend.services.llm.gateway import chat
     last_err = "judge 未产生任何有效输出"
     # images 非空时走**带图评判**（裁判直接看画面，而不是只读 VL 转述）——
@@ -93,23 +94,36 @@ async def _ask(system: str, user: str, max_tokens: int = JUDGE_MAX_TOKENS,
     msg = {"role": "user", "content": user}
     if images:
         msg["images"] = images
-    for mt in (max_tokens, max_tokens * 2, 16000):
-        ans, usage = await chat(
-            messages=[msg],
-            system_prompt=system,
-            temperature=0.0,
-            max_tokens=mt,
-            judge=True,      # 走 JUDGE_* 专用模型；未配置则回落并告警（见 _chat_cfg）
-        )
-        if not ans.strip():
-            last_err = f"输出为空（reasoning 吃光 token）：{usage}"
-            continue
+
+    # ★ 外层抗限流：裁判端点（bigmodel）会**突发性**返回 429 ——
+    #   实测同一时刻并发 4 全挂、并发 16 全通，不是固定并发上限。
+    #   网关自身的重试只有 3 次、退避最多 2.4s，扛不过这种突发；
+    #   而裁判一旦失败整条记录就被剔除，**一次限流会让整份报告变空**（实测 24/24 全废）。
+    #   所以这里再加一层更长退避的重试。
+    for attempt in range(3):
+        if attempt:
+            await _aio.sleep(3.0 * attempt)      # 3s / 6s
         try:
-            return _extract_json(ans)
-        except ValueError as e:
-            last_err = str(e)
+            for mt in (max_tokens, max_tokens * 2, 16000):
+                ans, usage = await chat(
+                    messages=[msg],
+                    system_prompt=system,
+                    temperature=0.0,
+                    max_tokens=mt,
+                    judge=True,  # 走 JUDGE_* 专用模型；未配置则回落并告警（见 _chat_cfg）
+                )
+                if not ans.strip():
+                    last_err = f"输出为空（reasoning 吃光 token）：{usage}"
+                    continue
+                try:
+                    return _extract_json(ans)
+                except ValueError as e:
+                    last_err = str(e)
+                    continue
+        except Exception as e:                   # 多为限流/网络，换一轮外层重试
+            last_err = f"{type(e).__name__}: {str(e)[:120]}"
             continue
-    raise RuntimeError(f"judge 判定失败（已重试 3 次）：{last_err}")
+    raise RuntimeError(f"judge 判定失败（外层重试 3 轮）：{last_err}")
 
 
 # 参考材料的截断上限。注意：全量字幕方案下 context = 完整字幕（可达 1 万字），

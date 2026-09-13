@@ -98,15 +98,24 @@ def _first_ts(case: dict) -> float:
     return max(0.0, float(ts))
 
 
-def video_duration(video_id: str) -> float:
-    """视频时长：用字幕末尾（已验证与视频时长对齐），避免依赖 ffprobe"""
-    path = os.path.join(SUBDIR, f"{video_id}.json")
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"字幕文件缺失，无法确定时长：{path}")
-    subs = json.load(open(path, encoding="utf-8"))
-    if not subs:
-        raise ValueError(f"字幕文件为空：{path}")
-    return float(subs[-1]["end"])
+def video_duration(video_id: str, state: dict = None) -> float:
+    """视频**真实**时长（ffmpeg）。
+
+    不能用字幕末尾代替：实测「卡尔爬楼梯」字幕到 941s 而视频有 953s ——
+    差 12 秒会让「整段视频」这类标注被误判成越界。
+    """
+    import re
+    from backend.config import FFMPEG_PATH
+    src = local_video_path(video_id) or (state or {}).get("video_path")
+    if not src or not os.path.exists(src):
+        raise FileNotFoundError(f"找不到本地视频，无法确定时长：{video_id}")
+    r = subprocess.run([FFMPEG_PATH, "-i", src], capture_output=True)
+    m = re.search(r"Duration: (\d+):(\d+):(\d+)\.(\d+)",
+                  r.stderr.decode("utf-8", "replace"))
+    if not m:
+        raise RuntimeError(f"读不出视频时长：{src}")
+    h, mi, sec, cs = (int(x) for x in m.groups())
+    return h * 3600 + mi * 60 + sec + cs / 100
 
 
 async def _grab(video_id: str, state: dict, ts: float,
@@ -199,7 +208,7 @@ async def build_assets(mode: str, video_id: str, state: dict,
     frames  {"paths": [...], "b64": [...], "desc": [...], "meta": {...}}
     video   {"video_path": ..., "b64": ..., "desc": [...], "meta": {...}}
     """
-    dur = video_duration(video_id)
+    dur = video_duration(video_id, state)
 
     if mode == "frame":
         return {"per_question": True, "duration": round(dur, 1)}
@@ -392,8 +401,25 @@ async def run_video(video: dict, args) -> list:
             raise RuntimeError(f"{name}：视频素材为空，放弃该视频")
 
     sem_q = asyncio.Semaphore(VIDEO_CONCURRENCY)
-    recs = await asyncio.gather(*[
-        ask_one(vid, state, c, transcript, args.mode, assets, args, sem_q) for c in cases])
+
+    async def safe(i, c):
+        """题目级隔离：**一题失败不能让整个视频丢掉**。
+        原实现下 gather 一旦抛异常，该视频的 10 题全部作废
+        —— 实测因为一道越界标注就丢了 2 个视频（占样本 20%）。"""
+        try:
+            return await ask_one(vid, state, c, transcript, args.mode, assets, args, sem_q)
+        except Exception as e:
+            logger.warning(f"{c['id']} 失败（不影响同视频其他题）：{type(e).__name__}: {e}")
+            return {"id": c["id"], "type": c["type"], "question": c["question"],
+                    "reference_answer": c["reference_answer"],
+                    "answer": f"[题目级异常] {type(e).__name__}: {str(e)[:150]}",
+                    "context": transcript, "frames": 0, "frame_error": str(e)[:150],
+                    "gen_error": f"{type(e).__name__}: {str(e)[:150]}", "latency_s": 0.0,
+                    "prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0,
+                    "judge_images": [], "judge_error": "未发起（题目异常）",
+                    "_ts": c["time_start"], "_te": c["time_end"]}
+
+    recs = await asyncio.gather(*[safe(i, c) for i, c in enumerate(cases)])
 
     for i, r in enumerate(recs, 1):
         if r["gen_error"]:

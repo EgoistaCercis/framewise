@@ -62,12 +62,12 @@
           "reference_answer": "顺序信息靠位置编码：在嵌入（Embedding）之后加上位置编码（Positional encoding）再输入编码器/解码器。编码器与解码器之间的信息传递则是把编码器输出y_1,...,y_n作为解码器中第i个Transformer块中多头注意力的key和value（query来自目标序列），这也意味着编码器和解码器中块的个数和输出维度必须一样。",
           "evidence": "位置编码（幻灯片标注及架构图中的Positional encoding加到Embedding上） ＋ 编码器中的输出y_1,...,y_n；将其作为解码中第i个Transformer块中多头注意力的key和value；它的query来自目标序列；意味着编码器和解码器中块的个数和输出维度都是一样的",
           "time_start": [
-            91,
-            1604
+            100,
+            982
           ],
           "time_end": [
             180,
-            1700
+            1035
           ]
         },
         {
@@ -214,8 +214,8 @@
           "question": "在\"非参注意力池化层\"幻灯片的公式标注中，橙色气泡框把Nadaraya-Watson核回归公式里的哪些部分分别标成了query、key和value？",
           "reference_answer": "橙色气泡框标注：f(x)中的查询x（公式左侧的x）标为query；分母/分子核函数中的x_i（即K(x−x_i)中的键）标为key；被加权求和的y_i标为value。这与字幕中\"每个输入是一个值（value）和不随意线索（key）的对、随意线索为查询（query）\"的定义对应。",
           "evidence": "字幕：随意线索被称之为查询（query）；每个输入是一个值（value）和不随意线索（key）的对 ＋ 画面：非参注意力池化层幻灯片中公式 f(x)=Σ_i K(x−x_i)/Σ_j K(x−x_j) · y_i 旁有三个橙色气泡框，分别指向f(x)的x（query）、K(x−x_i)中的x_i（key）、以及y_i（value）",
-          "time_start": 498,
-          "time_end": 925
+          "time_start": 545,
+          "time_end": 575
         },
         {
           "id": "a16bdbbe10cf_q9",
@@ -667,8 +667,8 @@
           "question": "当主讲人指着白板左侧说“这个是不是就是一个斐波那契数列”时，白板上从 1 阶到 6 阶对应写出的数值依次是什么？",
           "reference_answer": "1、2、3、5、8、13",
           "evidence": "字幕：「这个是不是就是一个斐波那契数列」+ 画面：白板左侧“1阶~6阶”一列旁手写数字依次为 1种、2种、3种、5种、8种、13种。",
-          "time_start": 1247,
-          "time_end": 1267
+          "time_start": 769,
+          "time_end": 773
         },
         {
           "id": "079807e4a7e0_q8",
@@ -746,12 +746,12 @@
           "reference_answer": "数量相同、顺序相同、每个动作一个 decision。",
           "evidence": "幻灯片底部列出了三个关键点：数量相同、顺序相同、每个动作一个 decision。同时展示了左侧 action_requests 的三个动作分别对应右侧 decisions 列表中的 approve、reject、respond。",
           "time_start": [
-            1014,
-            1654
+            1012,
+            1058
           ],
           "time_end": [
-            1095,
-            1735
+            1050,
+            1084
           ]
         },
         {
@@ -778,8 +778,8 @@
           "question": "当用户选择“拒绝（reject）”某个工具调用时，系统会向 Agent 返回什么内容？",
           "reference_answer": "系统会将用户在 decisions 中配置的 message 字段的内容作为反馈返回给 Agent，且该工具不会执行。",
           "evidence": "字幕提到“拒绝工具执行，并把原因反馈给 Agent”。画面流程图显示 reject 动作会导致“工具不会执行”，并且“message 会返回给 Agent”，代码示例中展示了 {'type': 'reject', 'message': '...'} 的结构。",
-          "time_start": 1412,
-          "time_end": 1498
+          "time_start": 851,
+          "time_end": 896
         },
         {
           "id": "116ab6082bb7_q8",
@@ -787,8 +787,8 @@
           "question": "在“resume: edit”的操作流程图中，从“原始参数”到“修改后执行”中间经历了哪个步骤？",
           "reference_answer": "人工修改。",
           "evidence": "字幕标题为“先改参数，再执行工具”。画面下方的流程图明确标注了三个阶段：原始参数 -> 人工修改 -> 修改后执行。",
-          "time_start": 1246,
-          "time_end": 1313
+          "time_start": 746,
+          "time_end": 770
         },
         {
           "id": "116ab6082bb7_q9",
