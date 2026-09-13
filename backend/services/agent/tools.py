@@ -37,7 +37,9 @@ def _neutralize(text: str) -> str:
     这里是集中收口点，加一道即可覆盖所有读取路径。
     """
     import re
-    return re.sub(r"</\s*external_content\s*>", "<\\/external_content>", text, flags=re.I)
+    # 容忍 `< /tag >`、`<\t/tag>` 这类空白变体：严格匹配 `</tag>` 的话，
+    # 只要在 `<` 和 `/` 之间塞一个空格就能绕过中和
+    return re.sub(r"<\s*/\s*external_content\s*>", "<\\/external_content>", text, flags=re.I)
 
 
 def _safe_note_path(filename: str) -> str:
@@ -47,7 +49,10 @@ def _safe_note_path(filename: str) -> str:
 
     if not filename or os.path.isabs(filename):
         raise ValueError("非法文件路径")
-    if os.path.splitext(os.path.basename(filename))[0].upper() in _WIN_RESERVED:
+    # 比对前 strip(" .")：Windows 会先剥掉尾部的空格和点再判定保留名，
+    # 所以 "CON .md" / "CON..md" / "nul .txt" 都会落到设备名上
+    stem = os.path.splitext(os.path.basename(filename))[0].upper().strip(" .")
+    if stem in _WIN_RESERVED:
         raise ValueError(f"非法文件名（Windows 保留名）：{filename}")
     os.makedirs(NOTE_DIR, exist_ok=True)
     full = os.path.realpath(os.path.join(NOTE_DIR, filename))
@@ -119,7 +124,9 @@ class RagAnswerTool(Tool):
 
         index, meta = load_index(context["video_hash"])
         query_embedding = await embed_single(question, video_id=context.get("video_id"))
-        results = search(index, meta, query_embedding, top_k=5)
+        # faiss 是同步 CPU 调用，直接 await 会阻塞事件循环 ——
+        # 评测侧三个脚本已改 to_thread，这里之前漏了，两边行为不一致
+        results = await asyncio.to_thread(search, index, meta, query_embedding, top_k=5)
         if not results:
             return "未检索到相关字幕内容"
         parts = []
@@ -318,14 +325,18 @@ class ListNotesTool(Tool):
         import os
         from backend.config import NOTE_DIR
         os.makedirs(NOTE_DIR, exist_ok=True)
-        files = sorted(
-            f for f in os.listdir(NOTE_DIR)
-            if os.path.isfile(os.path.join(NOTE_DIR, f))
-        )
-        if not files:
+        # 子目录也要列出来：用户手动在笔记目录放了文件夹时，
+        # read_file("sub/x.md") 能读到、list_notes 却看不到，
+        # 模型会据此判断"文件不存在"，然后放弃或瞎猜文件名
+        entries = sorted(os.listdir(NOTE_DIR))
+        if not entries:
             return "笔记目录当前为空。"
-        return ("笔记目录下的文件：\n"
-                + "\n".join(f"- {f}" for f in files)
+        lines = [
+            f"- {e}/（目录）" if os.path.isdir(os.path.join(NOTE_DIR, e)) else f"- {e}"
+            for e in entries
+        ]
+        return ("笔记目录下的条目（仅顶层，子目录内容未展开）：\n"
+                + "\n".join(lines)
                 + "\n\n（.bak 是删除时自动留的备份）")
 
 
