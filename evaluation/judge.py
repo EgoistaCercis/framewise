@@ -100,6 +100,16 @@ async def _ask(system: str, user: str, max_tokens: int = JUDGE_MAX_TOKENS,
     # 见 judge_record 的说明。不带图时消息结构与以前**完全一致**，V1~V4 不受影响。
     msg = {"role": "user", "content": user}
     if images:
+        # ★ 必须显式声明「随附的画面也算参考材料」。
+        #   否则裁判只看文字 —— 因为 FAITHFULNESS_PROMPT 写的是「只依据参考材料判断」，
+        #   而它会把这个「参考材料」理解成 user 消息里的那段**文本**，附上的图被当作噪音。
+        #   实测同一断言：不加这句判 0.0，加了判 1.0。
+        #   后果很隐蔽：画面题的正确回答被系统性判成「无依据」，
+        #   visual_only 忠实度被压到 0.486（逐条人工核对，5 条里 4 条其实是对的）。
+        msg["content"] = user + (
+            "\n\n【注意】本次参考材料**除上述文本外，还包括随附的画面**。"
+            "画面中可见的内容同样算作「有依据」，不要因为文字材料里没写就判为无依据。"
+        )
         msg["images"] = images
 
     # ★ 外层抗限流：裁判端点（bigmodel）会**突发性**返回 429 ——
