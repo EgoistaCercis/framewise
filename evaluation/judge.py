@@ -2,7 +2,13 @@
 帧知 - LLM-as-judge 公共模块
 
 用 LLM 对回答打分，供生成层评测调用。
-注意：judge 与被评模型同源（都用 DeepSeek），存在自评偏差，结论需结合人工抽查。
+
+裁判走**独立的 `JUDGE_*` 模型**（现为 `glm-5.3-flash`），与被评模型（deepseek）**不同源**，
+已消除自评偏差；未配置 `JUDGE_*` 时回落到默认模型并告警（此时偏差回归）。
+
+支持**带图评判**：记录的 `judge_images` 字段非空时，裁判会直接看到画面，
+而不是只读 VL 转述 —— 这让画面题的判据不再依赖有损的中间环节（见踩坑 #19）。
+V1~V4 不带该字段，行为与以前完全一致。
 """
 import json
 import re
@@ -71,7 +77,8 @@ REFUSAL_PROMPT = """判断「回答」是否在拒绝作答（即：明确表示
 JUDGE_MAX_TOKENS = 6000
 
 
-async def _ask(system: str, user: str, max_tokens: int = JUDGE_MAX_TOKENS) -> dict:
+async def _ask(system: str, user: str, max_tokens: int = JUDGE_MAX_TOKENS,
+               images: list = None) -> dict:
     """调用 judge，梯度加大 max_tokens 重试。
 
     两种失败都要重试，而且**最终必须显式报错**（走 judge_error 通道），
@@ -81,9 +88,14 @@ async def _ask(system: str, user: str, max_tokens: int = JUDGE_MAX_TOKENS) -> di
     """
     from backend.services.llm.gateway import chat
     last_err = "judge 未产生任何有效输出"
+    # images 非空时走**带图评判**（裁判直接看画面，而不是只读 VL 转述）——
+    # 见 judge_record 的说明。不带图时消息结构与以前**完全一致**，V1~V4 不受影响。
+    msg = {"role": "user", "content": user}
+    if images:
+        msg["images"] = images
     for mt in (max_tokens, max_tokens * 2, 16000):
         ans, usage = await chat(
-            messages=[{"role": "user", "content": user}],
+            messages=[msg],
             system_prompt=system,
             temperature=0.0,
             max_tokens=mt,
@@ -117,17 +129,24 @@ def _score_of(r: dict, key: str = "score") -> float:
     return float(r[key])
 
 
-async def judge_faithfulness(context: str, answer: str) -> dict:
-    """忠实度：回答是否忠于参考材料（不编造）"""
+async def judge_faithfulness(context: str, answer: str, images: list = None) -> dict:
+    """忠实度：回答是否忠于参考材料（不编造）。
+
+    `images` 非空时裁判**直接看画面**，而不是只读 VL 的描述 ——
+    这既收紧了判据（不再依赖有损的转述），也修掉了「判官看不到图片」的盲区（踩坑 #19）。
+    """
     r = await _ask(FAITHFULNESS_PROMPT,
-                   f"【参考材料】\n{context[:CONTEXT_LIMIT]}\n\n【回答】\n{answer}")
+                   f"【参考材料】\n{context[:CONTEXT_LIMIT]}\n\n【回答】\n{answer}",
+                   images=images)
     return {"score": _score_of(r), "unsupported": r.get("unsupported", [])}
 
 
-async def judge_relevancy(question: str, reference: str, answer: str) -> dict:
-    """相关性：是否切题、与标准答案语义一致"""
+async def judge_relevancy(question: str, reference: str, answer: str,
+                          images: list = None) -> dict:
+    """相关性：是否切题、与标准答案语义一致。`images` 语义同 judge_faithfulness。"""
     r = await _ask(RELEVANCY_PROMPT,
-                   f"【问题】\n{question}\n\n【标准答案】\n{reference}\n\n【回答】\n{answer}")
+                   f"【问题】\n{question}\n\n【标准答案】\n{reference}\n\n【回答】\n{answer}",
+                   images=images)
     return {"score": _score_of(r), "reason": r.get("reason", "")}
 
 
@@ -165,14 +184,17 @@ async def judge_record(rec: dict) -> dict:
 
     失败时**直接抛异常**，由调用方记进 judge_error —— 绝不静默当 0 分。
     """
+    imgs = rec.get("judge_images")      # 可选：裁判直接看的画面（V5 用；V1~V4 不带）
+
     if rec["type"] == "unanswerable":
         j = await judge_refusal(rec["question"], rec["answer"])
         rec["refused"] = j["refused"]
         rec["refusal_votes"] = j["votes"]
         rec["refusal_reason"] = j["reason"]
     else:
-        f = await judge_faithfulness(rec["context"], rec["answer"])
-        r = await judge_relevancy(rec["question"], rec["reference_answer"], rec["answer"])
+        f = await judge_faithfulness(rec["context"], rec["answer"], images=imgs)
+        r = await judge_relevancy(rec["question"], rec["reference_answer"], rec["answer"],
+                                  images=imgs)
         c = citation_hit(rec["answer"], rec["_ts"], rec["_te"])
         rec.update({
             "faithfulness": f["score"], "unsupported": f["unsupported"][:3],

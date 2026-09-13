@@ -88,13 +88,19 @@ def _is_configured(key: str) -> bool:
     return bool(key) and key.strip() != "your_key_here"
 
 
-def _chat_cfg(smart: bool = False, judge: bool = False) -> dict:
-    """返回 chat 配置。路由优先级：**judge > smart > 默认**。
+def _chat_cfg(smart: bool = False, judge: bool = False, multimodal: bool = False) -> dict:
+    """返回 chat 配置。路由优先级：**judge > multimodal > smart > 默认**。
+
+    为什么 judge 优先于 multimodal：裁判可能会**带图评判**（如 V5 —— 把帧直接给裁判，
+    而不是先经 VL 转成文字）。此时要的是 `JUDGE_*` 那个模型（要求它支持图片），
+    而不是 `MULTIMODAL_*`。若让 multimodal 抢先，裁判就被换成另一个模型了，
+    「换裁判=换尺子」的红线会被无声突破。
 
     - `judge=True`：评测裁判专用模型（`JUDGE_*`）。独立配置的意义是**打破自评偏差** ——
       裁判与被评模型同源时，会系统性地给自己的输出打高分；换个厂家来评才站得住。
+    - `multimodal=True`：多模态模型（`MULTIMODAL_*`），把图和问题一起交给同一个模型。
     - `smart=True`：前端「智能」开关，与默认模型厂家可不同。
-    - 都未配置（含占位符）时**回落默认模型**，与 config.py 注释、前端提示一致。
+    - 未配置（含占位符）时**回落默认模型**，并告警。
     """
     if judge:
         if _is_configured(config.JUDGE_API_KEY) and config.JUDGE_MODEL:
@@ -110,6 +116,17 @@ def _chat_cfg(smart: bool = False, judge: bool = False) -> dict:
             "JUDGE_* 未配置（或仍是占位符），裁判回落到默认 chat 模型 —— "
             "此时裁判与被评模型同源，存在**自评偏差**，报告里需注明。"
         )
+
+    if multimodal:
+        if _is_configured(config.MULTIMODAL_API_KEY) and config.MULTIMODAL_MODEL:
+            return {
+                "provider": config.MULTIMODAL_PROVIDER or "multimodal",
+                "base_url": _endpoint_to_base(config.MULTIMODAL_ENDPOINT, "/chat/completions"),
+                "api_key": config.MULTIMODAL_API_KEY,
+                "model": config.MULTIMODAL_MODEL,
+            }
+        logger.warning("MULTIMODAL_* 未配置（或仍是占位符），回落到默认 chat 模型 —— "
+                       "此时图片会发给一个可能不支持图片的模型，结果不可信。")
 
     if smart and _is_configured(config.SMART_LLM_API_KEY):
         return {
@@ -247,6 +264,41 @@ class GatewayProtocolError(RuntimeError):
     """
 
 
+def _expand_multimodal(msgs: list[dict]) -> list[dict]:
+    """把带 `images` / `video` 字段的消息转成 OpenAI 多模态 content 数组。
+
+    - `images`: base64 图片字符串列表（不含 `data:` 前缀）→ `image_url` 块
+    - `video` : 单个 base64 视频字符串 → `video_url` 块（DashScope 兼容格式）
+
+    用法：
+        {"role": "user", "content": "请看这几帧", "images": [b64, b64, ...]}
+        {"role": "user", "content": "以下是完整视频", "video": b64}
+
+    ⚠️ **图片/视频放在哪条消息由调用方决定，网关不替它选。** 这对**前缀缓存**很关键：
+    同一视频的多帧（或整段视频）必须放在**固定的前缀位置**（且内容逐字节相同），
+    后面的问题才能命中缓存。若网关擅自挪到"最后一条 user 消息"，
+    媒体就会跟着问题一起变，缓存全失效。
+    """
+    out = []
+    for m in msgs:
+        imgs = m.get("images")
+        vid = m.get("video")
+        if not imgs and not vid:
+            out.append({k: v for k, v in m.items() if k not in ("images", "video")})
+            continue
+        text = m.get("content") or ""
+        blocks = [{"type": "text", "text": text}] if text else []
+        blocks += [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b}"}}
+            for b in (imgs or [])
+        ]
+        if vid:
+            blocks.append({"type": "video_url",
+                           "video_url": {"url": f"data:video/mp4;base64,{vid}"}})
+        out.append({"role": m["role"], "content": blocks})
+    return out
+
+
 def _first_choice(resp, desc: str):
     """取第一个 choice 的 message，为空时给出可读错误。
 
@@ -348,17 +400,20 @@ async def chat(messages: list[dict], system_prompt: str = None,
     - `smart=True`：用独立的高阶模型（config.SMART_LLM_*，厂家可不同）
     - `judge=True`：用评测裁判专用模型（config.JUDGE_*）。优先级高于 smart。
       独立配置是为了**打破自评偏差**（同源裁判会偏松），未配置则回落并告警。
+    - **消息里若带 `images` 字段**（base64 列表），自动路由到 `MULTIMODAL_*` 模型，
+      并把该消息转成多模态 content 数组。图片放哪条消息由调用方决定（见 _expand_multimodal）。
     - video_id 仅用于把用量归到某个视频（可选；不传则只记总量）。
     """
     if max_tokens is None:
         max_tokens = config.LLM_MAX_TOKENS
-    cfg = _chat_cfg(smart, judge)
+    has_images = any(m.get("images") or m.get("video") for m in messages)
+    cfg = _chat_cfg(smart, judge, multimodal=has_images)
     client = await _client(cfg)
 
     msgs = []
     if system_prompt:
         msgs.append({"role": "system", "content": system_prompt})
-    msgs.extend(messages)
+    msgs.extend(_expand_multimodal(messages) if has_images else messages)
 
     try:
         resp = await _with_retry(

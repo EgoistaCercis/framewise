@@ -53,6 +53,14 @@ JUDGE_ENDPOINT = os.getenv("JUDGE_ENDPOINT", "")
 JUDGE_API_KEY = os.getenv("JUDGE_API_KEY", "")
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", "")
 
+# 多模态模型（评测 V5 用：把画面**直接**给模型，而不是先经 VL 转成文字）。
+# 与 VISION_* 的区别：VISION_* 是「描述单帧」的辅助模型，输出文字供主模型消费；
+# MULTIMODAL_* 是「直接把图和问题一起理解」的模型。两者角色不同，故分开配置。
+MULTIMODAL_PROVIDER = os.getenv("MULTIMODAL_PROVIDER", "")
+MULTIMODAL_ENDPOINT = os.getenv("MULTIMODAL_ENDPOINT", "")
+MULTIMODAL_API_KEY = os.getenv("MULTIMODAL_API_KEY", "")
+MULTIMODAL_MODEL = os.getenv("MULTIMODAL_MODEL", "")
+
 # Smart Chat（前端可切换的高阶模型，厂家/endpoint/key/model 均独立于 default）
 # 前端「智能」按钮开启 chat 时使用；未配置 SMART_LLM_API_KEY 时自动回落 default
 SMART_LLM_PROVIDER = os.getenv("SMART_LLM_PROVIDER", LLM_PROVIDER)
