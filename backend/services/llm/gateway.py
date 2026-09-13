@@ -88,12 +88,29 @@ def _is_configured(key: str) -> bool:
     return bool(key) and key.strip() != "your_key_here"
 
 
-def _chat_cfg(smart: bool = False) -> dict:
-    """返回 chat 配置；smart=True 时使用独立的高阶模型（厂家可不同）
+def _chat_cfg(smart: bool = False, judge: bool = False) -> dict:
+    """返回 chat 配置。路由优先级：**judge > smart > 默认**。
 
-    SMART_LLM_API_KEY 未配置（含占位符）时**回落默认模型** —— 与 config.py 的
-    注释和前端提示保持一致（前端会显示"智能模型未配置，本次仍使用默认模型"）。
+    - `judge=True`：评测裁判专用模型（`JUDGE_*`）。独立配置的意义是**打破自评偏差** ——
+      裁判与被评模型同源时，会系统性地给自己的输出打高分；换个厂家来评才站得住。
+    - `smart=True`：前端「智能」开关，与默认模型厂家可不同。
+    - 都未配置（含占位符）时**回落默认模型**，与 config.py 注释、前端提示一致。
     """
+    if judge:
+        if _is_configured(config.JUDGE_API_KEY) and config.JUDGE_MODEL:
+            return {
+                "provider": config.JUDGE_PROVIDER or "judge",
+                "base_url": _endpoint_to_base(config.JUDGE_ENDPOINT, "/chat/completions"),
+                "api_key": config.JUDGE_API_KEY,
+                "model": config.JUDGE_MODEL,
+            }
+        # 静默回落会让「裁判 = 被评模型」这件事悄悄发生，评测结论里就带着自评偏差 ——
+        # 所以这里必须喊一声（会进评测日志）
+        logger.warning(
+            "JUDGE_* 未配置（或仍是占位符），裁判回落到默认 chat 模型 —— "
+            "此时裁判与被评模型同源，存在**自评偏差**，报告里需注明。"
+        )
+
     if smart and _is_configured(config.SMART_LLM_API_KEY):
         return {
             "provider": config.SMART_LLM_PROVIDER,
@@ -324,15 +341,18 @@ def translate_error(e: Exception, provider: str = "") -> str:
 # ═══════════════════════════════════════════════════════
 async def chat(messages: list[dict], system_prompt: str = None,
                temperature: float = 0.7, max_tokens: int = None,
-               smart: bool = False, video_id: str = None) -> tuple[str, dict]:
+               smart: bool = False, judge: bool = False,
+               video_id: str = None) -> tuple[str, dict]:
     """调用 LLM 对话，返回 (回答文本, usage信息)
 
-    smart=True 时使用独立的高阶模型（config.SMART_LLM_*，厂家可不同）。
-    video_id 仅用于把用量归到某个视频（可选；不传则只记总量）。
+    - `smart=True`：用独立的高阶模型（config.SMART_LLM_*，厂家可不同）
+    - `judge=True`：用评测裁判专用模型（config.JUDGE_*）。优先级高于 smart。
+      独立配置是为了**打破自评偏差**（同源裁判会偏松），未配置则回落并告警。
+    - video_id 仅用于把用量归到某个视频（可选；不传则只记总量）。
     """
     if max_tokens is None:
         max_tokens = config.LLM_MAX_TOKENS
-    cfg = _chat_cfg(smart)
+    cfg = _chat_cfg(smart, judge)
     client = await _client(cfg)
 
     msgs = []

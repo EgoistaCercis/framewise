@@ -87,6 +87,7 @@ async def _ask(system: str, user: str, max_tokens: int = JUDGE_MAX_TOKENS) -> di
             system_prompt=system,
             temperature=0.0,
             max_tokens=mt,
+            judge=True,      # 走 JUDGE_* 专用模型；未配置则回落并告警（见 _chat_cfg）
         )
         if not ans.strip():
             last_err = f"输出为空（reasoning 吃光 token）：{usage}"

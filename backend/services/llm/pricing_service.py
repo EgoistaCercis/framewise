@@ -11,6 +11,8 @@
 """
 import os
 import sqlite3
+
+from loguru import logger
 from datetime import datetime, timezone
 
 from backend.config import DATA_DIR
@@ -19,6 +21,9 @@ DB_PATH = os.path.join(DATA_DIR, "usage.db")
 
 # 生效时间的默认值：任何价格都必须 >= 它（最早版本）
 _EPOCH = "1970-01-01T00:00:00"
+
+# 已经告警过「价格表缺这个模型」的模型名，避免每次调用都刷屏
+_price_missing_warned: set = set()
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -112,7 +117,15 @@ def get_price(model: str, timestamp: str = None) -> dict:
         LIMIT 1
     """, (model, ts)).fetchone()
     if row is None:
-        # 无精确匹配 → 落到 default 的有效价格
+        # 无精确匹配 → 落到 default 的有效价格。
+        # 必须**告警**：否则成本看板上这个模型的钱看起来是真的，实际是按兜底价估的。
+        # 用一个集合去重，避免同一模型每次调用都刷屏。
+        if model not in _price_missing_warned:
+            _price_missing_warned.add(model)
+            logger.warning(
+                f"价格表里没有 {model}，成本按 default 兜底价估算 —— "
+                f"数字仅供量级参考，要精确请更新 pricing 表。"
+            )
         row = conn.execute("""
             SELECT * FROM pricing
             WHERE model = 'default' AND active = 1 AND effective_from <= ?

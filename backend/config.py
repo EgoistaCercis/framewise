@@ -44,6 +44,15 @@ LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "120"))
 # 都可能长时间挂起；Agent 循环本身没有别的兜底，一个工具卡死就占住整轮对话。
 AGENT_TOOL_TIMEOUT = float(os.getenv("AGENT_TOOL_TIMEOUT", "180"))
 
+# LLM-as-judge 专用模型（仅评测使用）。
+# 独立配置的意义：裁判与被评模型**同源会有自评偏差**（自己评自己偏松），
+# 换一个厂家的模型来评，结论才更有说服力。不配则回落到默认 chat 模型
+# （此时必须在报告里注明"裁判与被评模型同源"）。
+JUDGE_PROVIDER = os.getenv("JUDGE_PROVIDER", "")
+JUDGE_ENDPOINT = os.getenv("JUDGE_ENDPOINT", "")
+JUDGE_API_KEY = os.getenv("JUDGE_API_KEY", "")
+JUDGE_MODEL = os.getenv("JUDGE_MODEL", "")
+
 # Smart Chat（前端可切换的高阶模型，厂家/endpoint/key/model 均独立于 default）
 # 前端「智能」按钮开启 chat 时使用；未配置 SMART_LLM_API_KEY 时自动回落 default
 SMART_LLM_PROVIDER = os.getenv("SMART_LLM_PROVIDER", LLM_PROVIDER)
