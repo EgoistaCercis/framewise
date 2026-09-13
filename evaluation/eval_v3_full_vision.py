@@ -222,9 +222,36 @@ async def main():
     print(f"抽帧失败 {frame_fail} | 平均 input {cost['avg_prompt_tokens']:.0f}"
           f"（缓存 {cost['avg_cached_tokens']:.0f}）| 平均延迟 {cost['avg_latency_s']}s")
 
+    # ── 健康检查：与 V4 同一套标准 ──
+    # V3 是"每题固定看一帧"，所以「尝试次数」恒等于题数，frame_ok 就是成功与否。
+    # 但这不代表不需要门禁 —— 抽帧/视觉全挂时报告照样会正常打出一张表，
+    # 正是 V4 当初那个坑（23/80 题画面全失败、跑了 9 分钟才发现）的翻版。
+    frame_attempted = len(records)
+    all_failed_ids = [r["id"] for r in records if not r["frame_ok"] and not r.get("gen_error")]
+    fail_rate = frame_fail / frame_attempted if frame_attempted else 0
+    health = {
+        "frame_attempted": frame_attempted, "frame_ok": frame_attempted - frame_fail,
+        "frame_fail_rate": round(fail_rate, 3),
+        "questions_all_failed": len(all_failed_ids),
+        "ok": fail_rate < 0.1,
+    }
+    cost["health"] = health
+
+    print("\n跑批健康检查")
+    print(f"  抽帧 {frame_attempted} 次，成功 {frame_attempted - frame_fail} 次"
+          f"（失败率 {fail_rate:.1%}）")
+    if health["ok"]:
+        print("  ✓ 正常")
+    else:
+        print(f"  ✗ 异常：抽帧失败率 {fail_rate:.1%} → 报告里的画面信息不可信")
+        print(f"    涉及题目: {all_failed_ids[:8]}{' …' if len(all_failed_ids) > 8 else ''}")
+        print("    先查日志里的抽帧报错，别拿这份结果下结论")
+        logger.error(f"健康检查未通过：抽帧失败率 {fail_rate:.1%}，{len(all_failed_ids)} 题无画面")
+
     fails = [r for r in records if r.get("judge_error")]
     json.dump({"summary": summary, "cost": cost,
                "judge_failures": len(fails), "gen_failures": n_gen_fail,
+               "health": health,
                "records": [{k: v for k, v in r.items() if k != "context"} for r in records]},
               open(OUT, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
     print(f"\n耗时 {(time.time()-t0)/60:.1f} 分钟，已存 {OUT}")
