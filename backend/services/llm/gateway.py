@@ -222,6 +222,14 @@ def _degrade_stream_usage(e) -> None:
         )
 
 
+class GatewayProtocolError(RuntimeError):
+    """网关自身发现的协议层问题（不是厂商返回的错误）。
+
+    带的是**已经写好的可读信息**，translate_error 必须原样透传、
+    不能再包一层 —— 否则精心写的提示会被前缀和 [:100] 截断糊掉。
+    """
+
+
 def _first_choice(resp, desc: str):
     """取第一个 choice 的 message，为空时给出可读错误。
 
@@ -231,7 +239,7 @@ def _first_choice(resp, desc: str):
     """
     choices = getattr(resp, "choices", None)
     if not choices:
-        raise RuntimeError(
+        raise GatewayProtocolError(
             f"{desc} 返回了空 choices —— 通常是被厂商的内容过滤/安全策略拦截，"
             f"也可能是该厂商的协议不完全兼容"
         )
@@ -291,6 +299,9 @@ def _record_text_estimate(cfg: dict, call_type: str, text_chars: int,
 # ── 错误翻译：openai 异常 → 中文提示 ───────────────────────
 def translate_error(e: Exception, provider: str = "") -> str:
     """将 openai SDK 异常翻译为用户友好的中文提示"""
+    if isinstance(e, GatewayProtocolError):
+        # 已经是可读信息，原样透传（见 GatewayProtocolError 的说明）
+        return str(e)
     if isinstance(e, AuthenticationError):
         return f"{provider} API Key 无效，请检查 .env 配置"
     if isinstance(e, RateLimitError):
@@ -426,6 +437,10 @@ async def chat_stream(messages: list[dict], system_prompt: str = None,
             # 所有流式调用（产品的默认交互路径）用量会全丢
             stream = await _with_retry(_mk(_stream_opts()), desc="chat_stream")
         except BadRequestError as e:
+            # 只有**确实因为 stream_options 被拒**才降级：任何 400 都降级的话，
+            # 一次无关的参数报错就会让整个进程永久失去 stream usage
+            if "stream_options" not in str(e).lower():
+                raise
             _degrade_stream_usage(e)
             stream = await _with_retry(_mk({}), desc="chat_stream")
         stream_usage = {}
@@ -473,6 +488,10 @@ async def chat_with_tools_stream(messages: list[dict], system_prompt: str = None
         try:
             stream = await _with_retry(_mk(_stream_opts()), desc="chat_with_tools_stream")
         except BadRequestError as e:
+            # 只有**确实因为 stream_options 被拒**才降级：任何 400 都降级的话，
+            # 一次无关的参数报错就会让整个进程永久失去 stream usage
+            if "stream_options" not in str(e).lower():
+                raise
             _degrade_stream_usage(e)
             stream = await _with_retry(_mk({}), desc="chat_with_tools_stream")
         content_parts = []
@@ -671,7 +690,8 @@ async def asr_url(audio_url: str, video_id: str = None) -> list[dict]:
     from http import HTTPStatus
 
     api_key = config.ASR_URL_API_KEY
-    if not api_key:
+    # 与 _client 用同一个判定：占位符 your_key_here 也算未配置
+    if not _is_configured(api_key):
         raise RuntimeError("ASR URL Api Key 未配置（ASR_URL_API_KEY），请在 .env 中设置")
     dashscope.api_key = api_key
 

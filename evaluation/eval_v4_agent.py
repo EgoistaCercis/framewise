@@ -147,14 +147,18 @@ async def run_video(video: dict, limit: int) -> list[dict]:
         box: list = []
         _usage_sink.set(box)        # 本任务专属的收集线
         t1 = time.time()
+        gen_err = None
         try:
             result = await agent.run(case["question"], context)
             ans = result["answer"]
             steps = result["steps"]
         except Exception as e:
             # steps 记 None 而不是 0：0 会被算进平均值、把 avg_steps 拉低，
-            # 让「有多少题需要多步」这件事看起来比实际更好
-            ans, steps = f"[Agent 异常] {type(e).__name__}: {str(e)[:150]}", None
+            # 让「有多少题需要多步」这件事看起来比实际更好。
+            # gen_error 与 V1~V3 对齐：异常的记录没有有效答案，不该进裁判
+            # （否则被评成忠实度≈0，白白拖低均值）。
+            gen_err = f"{type(e).__name__}: {str(e)[:150]}"
+            ans, steps = f"[Agent 异常] {gen_err}", None
         lat = round(time.time() - t1, 2)
 
         # ★ 必须跨步求和。原来只取 box[0]（Agent 第一步）的 usage，
@@ -186,7 +190,7 @@ async def run_video(video: dict, limit: int) -> list[dict]:
             #    而 vision_count 照常是正数，「看画面」照常打印，跑了 9 分钟才发现。
             "vision_ok": sum(1 for fr in called if fr.get("ok")),
             "vision_ts": [fr["ts"] for fr in called],
-            "steps": steps, "latency_s": lat,
+            "steps": steps, "gen_error": gen_err, "latency_s": lat,
             "prompt_tokens": usage.get("prompt_tokens", 0),
             "completion_tokens": usage.get("completion_tokens", 0),
             "cached_tokens": usage.get("cached_tokens", 0),
@@ -257,10 +261,14 @@ async def main():
     results = await asyncio.gather(*[guarded(v) for v in videos])
     records = [r for rs in results for r in rs]
 
-    print("\n裁判中...")
-    logger.info("裁判阶段开始")
+    # 生成/Agent 异常的记录没有有效答案，不该进裁判 —— 否则会被评成忠实度≈0，
+    # 白白拖低均值（与 V1~V3 的 gen_error 口径对齐）
+    todo = [r for r in records if not r.get("gen_error")]
+    n_gen_fail = len(records) - len(todo)
+    print(f"\n裁判中...（跳过 {n_gen_fail} 条生成/Agent 异常）")
+    logger.info(f"裁判阶段开始（跳过 {n_gen_fail} 条异常记录）")
     sem = asyncio.Semaphore(JUDGE_CONCURRENCY)
-    await asyncio.gather(*[judge_one(r, sem) for r in records])
+    await asyncio.gather(*[judge_one(r, sem) for r in todo])
 
     for r in records:
         if r.get("judge_error"):
@@ -275,7 +283,7 @@ async def main():
     from collections import defaultdict
     by = defaultdict(list)
     for r in records:
-        if not r.get("judge_error"):
+        if not r.get("judge_error") and not r.get("gen_error"):
             by[r["type"]].append(r)
 
     print("\n" + "=" * 96)
@@ -384,7 +392,7 @@ async def main():
 
     fails = [r for r in records if r.get("judge_error")]
     json.dump({"summary": summary, "cost": cost, "judge_failures": len(fails),
-               "health": health,
+               "gen_failures": n_gen_fail, "health": health,
                "records": [{k: v for k, v in r.items() if k != "context"} for r in records]},
               open(OUT, "w", encoding="utf-8"), ensure_ascii=False, indent=2)
     print(f"\n耗时 {(time.time()-t0)/60:.1f} 分钟，已存 {OUT}")

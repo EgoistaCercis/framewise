@@ -200,6 +200,12 @@ class Agent:
         但背后跑的是产品真正在用的那条循环。
 
         需要看中间过程（工具调用、确认请求）时请直接用 run_stream。
+
+        ⚠️ **确认语义**：`run` 是无人值守的收集器，它忽略 `confirm` 事件。
+        如果跑的工具 `requires_confirmation()` 为真，`_wait_confirmation` 会
+        一直等到超时（120s），然后以「未在时限内收到用户确认」跳过该操作 ——
+        也就是**静默跳过**，而不是失败。
+        交互式场景（需要用户点确认）请直接用 `run_stream`。
         """
         answer, steps, tool_calls = "", 0, []
         async for ev in self.run_stream(user_message, context):
@@ -276,14 +282,9 @@ class Agent:
             # 重复调用检测：同一批 (工具名, 参数) 与上一轮完全相同，说明模型在原地打转
             # （画面题历史上曾对同一题扫 44 次）。提示它基于已有信息作答，而不是
             # 干等到 max_iterations 耗尽 —— 每轮都是完整上下文的 token + 延迟。
+            # 注意这里只**判定**，提示要等工具结果回填完再插（见循环末尾的说明）。
             sig = tuple(sorted((tc["name"], tc["arguments"]) for tc in tool_calls))
-            if sig == last_tool_sig:
-                messages.append({
-                    "role": "user",
-                    "content": "你刚刚用完全相同的参数重复调用了同一个工具，结果不会有变化。"
-                               "请基于已经拿到的信息直接作答，或换一个完全不同的思路。",
-                })
-                logger.info("检测到重复工具调用，已提示模型改变策略")
+            repeated = (sig == last_tool_sig)
             last_tool_sig = sig
             for tc in tool_calls:
                 _log_trace(session_id, video_id, step, "tool_call",
@@ -339,6 +340,18 @@ class Agent:
                 result = await self._compress_tool_result(user_message, tc["name"], result)
                 _log_trace(session_id, video_id, step, "tool_result", result, tool_name=tc["name"])
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
+
+            # ★ 重复提示必须放在**所有 tool 结果回填之后**。
+            #   OpenAI 协议要求 `tool` 消息紧跟带 tool_calls 的 assistant 消息；
+            #   中间夹一条 user 消息属于协议违规 —— DeepSeek 容忍，
+            #   但严格实现的厂商（OpenAI 本家、部分兼容网关）会直接 400。
+            if repeated:
+                messages.append({
+                    "role": "user",
+                    "content": "你刚刚用完全相同的参数重复调用了同一个工具，结果不会有变化。"
+                               "请基于已经拿到的信息直接作答，或换一个完全不同的思路。",
+                })
+                logger.info("检测到重复工具调用，已提示模型改变策略")
 
         # ── 迭代耗尽兜底 ──
         # 原来直接返回写死的道歉，把前 N 轮收集的工具结果全部作废。用户白等，
