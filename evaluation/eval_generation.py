@@ -11,7 +11,9 @@
 
 注意：
 - 用干净的「单轮 RAG」路径，不注入对话历史/长期记忆，避免污染评测
-- judge 与被评模型同源，存在自评偏差
+- 裁判走独立的 `JUDGE_*` 模型（与被评模型**不同源**，已消除自评偏差）；
+  若 JUDGE_* 未配置会回落默认模型并告警，此时自评偏差回归
+- 并发可用 `.env` 的 `EVAL_CONCURRENCY` 覆盖
 
 用法：
     python evaluation/eval_generation.py [--limit N]
@@ -35,7 +37,10 @@ except Exception:
 DATASET = os.path.join(BASE, "evaluation", "dataset.json")
 OUT = os.path.join(BASE, "evaluation", "results_generation.json")
 TOP_K = 5
-CONCURRENCY = 4
+# 每题要「生成 + 2~3 次裁判」串行跑完，裁判是纯 I/O 等待（等远端 API），
+# 所以并发几乎是免费的 —— 裁判换成推理模型后单题可达 70s+，并发 4 会拖到 100 分钟。
+# 可用 .env 的 EVAL_CONCURRENCY 覆盖，不用改代码。
+CONCURRENCY = int(os.getenv("EVAL_CONCURRENCY", "20"))
 
 
 def _fmt(s: float) -> str:

@@ -32,7 +32,8 @@ import judge  # noqa: E402
 DATASET = os.path.join(BASE, "evaluation", "dataset.json")
 SUBDIR = os.path.join(BASE, "evaluation", "subtitles")
 OUT = os.path.join(BASE, "evaluation", "results_full_context.json")
-JUDGE_CONCURRENCY = 4
+# 裁判是纯 I/O 等待，并发几乎免费；可用 .env 的 EVAL_JUDGE_CONCURRENCY 覆盖
+JUDGE_CONCURRENCY = int(os.getenv("EVAL_JUDGE_CONCURRENCY", "40"))
 BLOCK_CHARS = 300   # 字幕合并成 ~300 字的块，减少时间戳噪音
 
 

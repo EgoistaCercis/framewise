@@ -32,7 +32,8 @@ from eval_full_context import format_transcript, _fmt  # noqa: E402
 DATASET = os.path.join(BASE, "evaluation", "dataset.json")
 OUT = os.path.join(BASE, "evaluation", "results_v3_full_vision.json")
 FRAME_CONCURRENCY = 3
-JUDGE_CONCURRENCY = 6
+# 裁判是纯 I/O 等待，并发几乎免费；可用 .env 的 EVAL_JUDGE_CONCURRENCY 覆盖
+JUDGE_CONCURRENCY = int(os.getenv("EVAL_JUDGE_CONCURRENCY", "40"))
 VIDEO_CONCURRENCY = 8     # 与 V4 保持一致，成本/缓存表现才可比
 
 

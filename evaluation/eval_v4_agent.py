@@ -45,7 +45,8 @@ from loguru import logger  # noqa: E402
 
 DATASET = os.path.join(BASE, "evaluation", "dataset.json")
 OUT = os.path.join(BASE, "evaluation", "results_v4_agent.json")
-JUDGE_CONCURRENCY = 6
+# 裁判是纯 I/O 等待，并发几乎免费；可用 .env 的 EVAL_JUDGE_CONCURRENCY 覆盖
+JUDGE_CONCURRENCY = int(os.getenv("EVAL_JUDGE_CONCURRENCY", "40"))
 VIDEO_CONCURRENCY = 8      # 8 个视频并行（=数据集全部视频数）
 
 # 每个视频任务各持一条 usage 收集线，避免并行下互相串数据
