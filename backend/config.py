@@ -39,6 +39,11 @@ LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))
 # 评测里的 judge 用 max_tokens=16000，本地实测偶尔会逼近这个上限，故做成可配置。
 LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "120"))
 
+# 单个工具的单次执行上限（秒）。
+# 工具内部可能调模型（analyze_frame 的 VL、generate_quiz）或拉流下载，
+# 都可能长时间挂起；Agent 循环本身没有别的兜底，一个工具卡死就占住整轮对话。
+AGENT_TOOL_TIMEOUT = float(os.getenv("AGENT_TOOL_TIMEOUT", "180"))
+
 # Smart Chat（前端可切换的高阶模型，厂家/endpoint/key/model 均独立于 default）
 # 前端「智能」按钮开启 chat 时使用；未配置 SMART_LLM_API_KEY 时自动回落 default
 SMART_LLM_PROVIDER = os.getenv("SMART_LLM_PROVIDER", LLM_PROVIDER)

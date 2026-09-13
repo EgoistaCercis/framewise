@@ -15,10 +15,14 @@ import uuid
 
 from loguru import logger
 
+from backend import config
 from backend.prompts import AGENT_SYSTEM_PROMPT
 from backend.services.agent.compress_agent import CompressAgent
 from backend.services.agent.tools import get_tools_openai, MAIN_TOOLS
 from backend.services.llm import gateway
+
+# 单个工具的单次执行上限，见 config.AGENT_TOOL_TIMEOUT
+_TOOL_TIMEOUT = config.AGENT_TOOL_TIMEOUT
 
 
 def _new_session() -> str:
@@ -129,8 +133,10 @@ class Agent:
         self.max_iterations = max_iterations
         self.smart = smart
         # 保存实际工具对象：执行时也要按这份列表查找，
-        # 否则传入自定义工具（如子类包装）会被全局注册表绕过
-        self.tools = list(tools) if tools else None
+        # 否则传入自定义工具（如子类包装）会被全局注册表绕过。
+        # 注意判 `is not None` 而不是真值：`Agent(tools=[])` 的语义是"不给任何工具"，
+        # 若按真值判断，空列表会被静默换成整套主工具（含删除文件）。
+        self.tools = list(tools) if tools is not None else None
         self.tools_openai = get_tools_openai(tools)
         self.compress_agent = CompressAgent(smart=smart)
 
@@ -317,10 +323,11 @@ class Agent:
         - 模型从没被告知的工具，执行时却查得到 → 越权（原来就是这个：
           主 agent 能查到记忆工具，而记忆的增删改按设计只属于 MemoryAgent）
 
-        不传 tools 时回退 MAIN_TOOLS（与 get_tools_openai(None) 同一份列表），
+        判定用 `is None` 而非真值：None = 用默认主工具集，[] = 没有工具。
+        回退目标是 MAIN_TOOLS（与 get_tools_openai(None) 同一份），
         而不是 _ALL_TOOLS —— 后者会把记忆工具也放进来。
         """
-        for t in (self.tools or MAIN_TOOLS):
+        for t in (MAIN_TOOLS if self.tools is None else self.tools):
             if t.name == name:
                 return t
         return None
@@ -338,7 +345,15 @@ class Agent:
             arguments = {}
 
         try:
-            return await tool.run(context, **arguments)
+            # 工具级超时：工具内部可能调模型（analyze_frame 的 VL、generate_quiz）
+            # 或拉流下载，都可能长时间挂起。Agent 循环本身没有别的兜底，
+            # 一个工具卡死就会占住整轮对话、把用户晾在那里。
+            return await asyncio.wait_for(
+                tool.run(context, **arguments), timeout=_TOOL_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning(f"工具 {name} 执行超时（>{_TOOL_TIMEOUT:.0f}s）")
+            return (f"工具 {name} 执行超时（超过 {_TOOL_TIMEOUT:.0f} 秒），已中止。"
+                    f"可以换个方式再试，或改用其他工具。")
         except Exception as e:
             logger.warning(f"工具 {name} 执行失败: {e}")
             return f"工具 {name} 执行失败：{e}"
