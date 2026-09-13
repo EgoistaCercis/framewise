@@ -4,14 +4,12 @@
 把画面**直接交给多模态模型**（而不像 V3/V4 那样先经 VL 转成文字描述），
 回答「一体化多模态 vs 我们的两段式链路，架构上差多少」。
 
-三个变体（`--mode`）：
+两个变体（`--mode`）：
 
   frame   V5-A：字幕 + **暂停点 1 帧**
           · 信息量与 V3 **完全相同** → 差异纯粹来自「画面直给 vs 经 VL 转述」
           · 这是最有价值的对照：能直接量出 VL 转述这一步损失了多少
-  frames  V5-B1：字幕 + **我们自己均匀抽的 N 帧**（`--fps`）
-          · 采样策略由我们控制，与 video 模式形成「自采样 vs 原生采样」的对照
-  video   V5-B2：字幕 + **整个视频文件**（`video_url` 直传，模型自己采样）
+  video   V5-B：字幕 + **整个视频文件**（`video_url` 直传，模型自己采样）
           · 这才是真正意义上的「原生视频理解」
           · 实测模型按 **260 tok/秒** 采样（≈0.3fps），20 分钟视频约 31 万 tokens
 
@@ -36,9 +34,10 @@
 ## 与 V1~V4 的可比性
 
 - **裁判完全同源**：`judge.judge_record` + `JUDGE_*` 模型，绝不换尺子
-- ⚠️ **V5 的 VL 描述基于缩图（默认 720p），V3 的基于原图**。缩图可能让描述遗漏
-  小字/细线，导致两边裁判材料存在**系统性微差**。量级预计很小，但排查 `visual_only`
-  分数差时要记得这个变量。可用 `--frame-width` 调大以缩小该差异（代价是上传体积）。
+- ⚠️ **默认不缩图**（`--frame-width 0`）。曾经默认 720p，实测会让**裁判判定变得不稳定**
+  （同一帧、同一断言，时而看得见时而看不见）→ `visual_only` 忠实度被系统性压低。
+  frame 模式只有 1 帧（约 165KB），本就没有缩图的必要。
+  video 模式给裁判抽的描述帧沿用 `--frame-width`（那里帧数多、需要控体积）。
 - **但 V5 与 V3 的口径仍有差异**：V3 是**顺序**问答（刻意命中前缀缓存），
   V5 是**并发**（多模态请求慢，顺序不现实）。并发下首题尚未落缓存、其余已首发，
   因此 `cache_hit_rate` 会低于 V3。报告成本时须注明。
@@ -213,24 +212,6 @@ async def build_assets(mode: str, video_id: str, state: dict,
     if mode == "frame":
         return {"per_question": True, "duration": round(dur, 1)}
 
-    if mode == "frames":
-        n = min(int(dur * args.fps), MAX_FRAMES_PER_VIDEO)
-        step = dur / max(n, 1)
-        ts_list = [round(i * step, 1) for i in range(n)]
-        got = await asyncio.gather(*[_grab(video_id, state, t, sem) for t in ts_list])
-        paths = [p for p, e in got if p]
-        # 缩图：原分辨率 1080p 单帧约 114KB，N 帧 base64 后能到几十 MB，
-        # 既超多数模型的单请求图片上限、也把上传时间推高一个量级
-        # 并行 + 不阻塞事件循环（ffmpeg 是同步子进程）
-        small = await asyncio.gather(
-            *[_downscale_async(p, args.frame_width) for p in paths])
-        desc = await describe_frames(small, video_id, sem) if args.judge_context == "vl" else []
-        judge_imgs = small if args.judge_context == "img" else []
-        meta = {"requested": len(ts_list), "ok": len(paths), "duration": round(dur, 1),
-                "failed_ts": [t for (p, e), t in zip(got, ts_list) if not p][:8]}
-        return {"paths": small, "b64": [_b64(p) for p in small], "desc": desc,
-                "judge_imgs": [_b64(p) for p in judge_imgs], "meta": meta}
-
     # video
     # 转码整段视频可能 10~60 秒，必须丢线程池，否则其余视频的抽帧/问答全停摆
     vpath = await asyncio.to_thread(prepare_video, video_id, state, args.video_width)
@@ -273,7 +254,8 @@ async def ask_one(video_id: str, state: dict, case: dict, transcript: str,
             path, frame_err = await _grab(video_id, state, _first_ts(case), _frame_sem)
             msgs = [{"role": "user", "content": f"<transcript>\n{transcript}\n</transcript>"}]
             if path:
-                small = await _downscale_async(path, args.frame_width)
+                small = (await _downscale_async(path, args.frame_width)
+                         if args.frame_width else path)
                 msgs.append({"role": "user",
                              "content": f"这是用户提问时视频暂停在 {_fmt(_first_ts(case))} 的那一帧。",
                              "images": [_b64(small)]})
@@ -281,18 +263,6 @@ async def ask_one(video_id: str, state: dict, case: dict, transcript: str,
                     descs = await describe_frames([small], video_id, _frame_sem)
             n_frames = 1 if path else 0
             judge_imgs = [_b64(small)] if path else []
-
-        elif mode == "frames":
-            msgs = [{"role": "user", "content": f"<transcript>\n{transcript}\n</transcript>"}]
-            b64s = assets["b64"]
-            if b64s:
-                msgs.append({
-                    "role": "user",
-                    "content": f"以下按时间顺序均匀抽取的 {len(b64s)} 帧，覆盖全片。",
-                    "images": b64s,
-                })
-            n_frames = len(b64s)
-            judge_imgs = b64s
 
         else:  # video
             msgs = [{"role": "user", "content": f"<transcript>\n{transcript}\n</transcript>"},
@@ -395,8 +365,6 @@ async def run_video(video: dict, args) -> list:
         m = assets["meta"]
         print(f"{tag} 素材就绪：{m}")
         logger.info(f"--- {name}：mode={args.mode} meta={m} ---")
-        if args.mode == "frames" and m["ok"] == 0:
-            raise RuntimeError(f"{name}：一帧都没抽到，放弃该视频（不静默降级）")
         if args.mode == "video" and not assets["b64"]:
             raise RuntimeError(f"{name}：视频素材为空，放弃该视频")
 
@@ -444,13 +412,17 @@ async def run_video(video: dict, args) -> list:
 async def main():
     global _frame_sem, _global_sem
     ap = argparse.ArgumentParser()
-    ap.add_argument("--mode", choices=["frame", "frames", "video"], default="frame")
-    ap.add_argument("--fps", type=float, default=0.2, help="frames 模式的抽帧密度")
+    ap.add_argument("--mode", choices=["frame", "video"], default="frame",
+                    help="frame=字幕+暂停点1帧；video=字幕+整段视频")
     ap.add_argument("--judge-context", choices=["img", "vl", "transcript"], default="img",
-                    help="vl=补 VL 描述（与 V3 口径一致，默认）；transcript=只给字幕（不可与 V3 直接比）")
+                    help="img=直接把画面给裁判（默认）；vl=先转成 VL 描述（与 V3 口径一致）；transcript=只给字幕（不可与 V3 直接比）")
     ap.add_argument("--judge-fps", type=float, default=0.1,
                     help="video 模式给裁判补描述时的抽帧密度（模型自身约 0.3fps）")
-    ap.add_argument("--frame-width", type=int, default=720, help="送模型的帧宽度（控制上传体积）")
+    ap.add_argument("--frame-width", type=int, default=0,
+                    help="送模型的帧宽度；0=不缩图（默认）。"
+                         "注意缩图会**同时**降低被评模型与裁判看到的清晰度 —— 实测 720p 下"
+                         "裁判判定变得不稳定（同一帧同一断言时而看得见时而看不见），"
+                         "而 frame 模式只有 1 帧、体积本就很小，没有必要缩。")
     ap.add_argument("--video-width", type=int, default=640, help="video 模式的视频宽度")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--videos", type=int, default=0, help="只跑前 N 个视频（冒烟用）")
@@ -472,7 +444,7 @@ async def main():
     log_path = setup_eval_log(f"eval_v5_{args.mode}")
     logger.info(f"=== V5-{args.mode} 评测开始 ===")
     logger.info(f"模型: {MULTIMODAL_MODEL} @ {ep_host}")
-    logger.info(f"裁判口径: {args.judge_context}  fps={args.fps} 帧宽={args.frame_width}")
+    logger.info(f"裁判口径: {args.judge_context}  帧宽={args.frame_width or '不缩图'}")
 
     _frame_sem = asyncio.Semaphore(FRAME_CONCURRENCY)
     _global_sem = asyncio.Semaphore(GLOBAL_CONCURRENCY)
@@ -501,9 +473,13 @@ async def main():
     if not records:
         raise SystemExit("没有任何记录产出，终止。")
 
-    print(f"\n裁判中...（{len(records)} 条）")
+    # 只裁判真正产出过回答的记录：帧失败短路的死记录已带 gen_error，
+    # 裁判它们纯属白烧 API（且会把预设的 judge_error 标记覆盖成 None，
+    # 产物里就看不出这条曾「未发起」了）
+    todo = [r for r in records if not r.get("gen_error")]
+    print(f"\n裁判中...（{len(todo)} 条，跳过 {len(records) - len(todo)} 条未发起）")
     sem = asyncio.Semaphore(JUDGE_CONCURRENCY)
-    await asyncio.gather(*[judge_one(r, sem) for r in records])
+    await asyncio.gather(*[judge_one(r, sem) for r in todo])
 
     # ── 汇总（gen_error / judge_error 一律剔除）──
     from collections import defaultdict
@@ -559,10 +535,13 @@ async def main():
     # 原子写：直写时崩溃会损坏评测产物（与 retry_failed 同一家规）
     tmp = out_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump({"summary": summary, "cost": cost, "mode": args.mode, "fps": args.fps,
+        json.dump({"summary": summary, "cost": cost, "mode": args.mode,
                    "judge_context": args.judge_context, "model": MULTIMODAL_MODEL,
-                   "video_metas": video_metas,
-                   "records": [{k: v for k, v in r.items() if k != "context"} for r in records]},
+                   # 只留素材元信息，**不要内嵌 records** —— 那会把图片 b64 再存一遍
+                   "video_metas": [{k: v for k, v in m.items() if k != "records"}
+                                   for m in video_metas],
+                   "records": [{k: v for k, v in r.items() if k not in ("context", "judge_images")}
+                        for r in records]},
                   fh, ensure_ascii=False, indent=2)
     os.replace(tmp, out_path)
     print(f"\n耗时 {(time.time()-t0)/60:.1f} 分钟，已存 {out_path}")
