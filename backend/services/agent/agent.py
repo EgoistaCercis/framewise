@@ -31,6 +31,22 @@ def _new_session() -> str:
     return uuid.uuid4().hex[:12]
 
 
+# 模型偶尔会把工具调用**写成文本**而不是走原生 function calling ——
+# 尤其在它调不动工具的时候（例如夹带了 `tools=None` 的兜底轮）。
+# 这种内容绝不能当答案返回给用户：看起来像乱码，末尾还常带被截断的特殊 token。
+_TOOLCALL_ARTIFACTS = ("<tool_calls>", "</tool_calls>", "<invoke name=",
+                       "<function_calls>", "antml:invoke", "<｜")
+
+
+def _looks_like_tool_call(text: str) -> bool:
+    """判断一段输出是不是「工具调用的文本残渣」而非真正的回答"""
+    t = (text or "").strip()
+    if not t:
+        return False
+    low = t.lower()
+    return any(a.lower() in low for a in _TOOLCALL_ARTIFACTS)
+
+
 def _log_trace(session_id: str, video_id: str, step: int, event_type: str,
                content: str = "", tool_name: str = None):
     """记录一条轨迹，失败不影响主流程"""
@@ -259,14 +275,20 @@ class Agent:
             if not tool_calls:
                 # 空答案守卫：既无 tool_calls 也无 content 时，原样返回会让前端
                 # 显示一片空白。视为异常轮次重试一次，仍空才如实说明。
-                if not full_content.strip() and not empty_retried:
+                # 「工具调用残渣」同理 —— 那是模型把调用写成了文本，不是回答。
+                invalid = (not full_content.strip()) or _looks_like_tool_call(full_content)
+                if invalid and not empty_retried:
                     empty_retried = True
-                    logger.warning("模型返回空答案且无工具调用，重试一次")
-                    _log_trace(session_id, video_id, step, "error", "空答案，重试")
+                    logger.warning("模型未给出有效回答（空内容或工具调用残渣），重试一次")
+                    _log_trace(session_id, video_id, step, "error", "无效回答，重试")
                     messages.append({"role": "user",
-                                     "content": "你上一次没有给出任何内容。请直接回答问题。"})
+                                     "content": "你上一次没有给出有效回答。"
+                                                "请直接用正常文字回答问题，不要输出工具调用格式。"})
                     continue
-                answer = full_content.strip() or "抱歉，我这次没能生成有效回答，请再试一次。"
+                answer = full_content.strip()
+                if not answer or _looks_like_tool_call(answer):
+                    logger.warning("重试后仍无有效回答，返回兜底文案")
+                    answer = "抱歉，我这次没能生成有效回答，请再试一次。"
                 _log_trace(session_id, video_id, step, "answer", answer)
                 yield {"type": "done", "answer": answer, "steps": step, "tool_calls": tool_call_log}
                 return
@@ -371,9 +393,14 @@ class Agent:
                 if event["type"] == "content":
                     final += event["delta"]
                     yield {"type": "content", "delta": event["delta"]}
-            answer = final.strip() or (
-                "抱歉，我调用了多次工具仍未收集到足够信息，无法可靠回答这个问题。"
-                "可以试着把问题问得更具体一些。")
+            answer = final.strip()
+            # ★ 兜底这轮传的是 tools=None，模型调不动工具时会把调用**写成文本** ——
+            #   实测就出现过 `<tool_calls><invoke name="analyze_frame">…` 被当成答案返回。
+            #   这种残渣必须拦掉，退回致歉文案（旧行为），而不是把乱码丢给用户。
+            if not answer or _looks_like_tool_call(answer):
+                logger.warning("兜底作答没有产出有效内容（空或工具调用残渣），回退到致歉文案")
+                answer = ("抱歉，我调用了多次工具仍未收集到足够信息，无法可靠回答这个问题。"
+                          "可以试着把问题问得更具体一些。")
         except Exception as e:
             logger.warning(f"迭代耗尽后的兜底作答失败：{e}")
             answer = ("抱歉，这个问题比较复杂，我尝试了多次仍未完成。请换一种方式提问。")
