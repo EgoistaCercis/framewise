@@ -221,17 +221,21 @@ async def main():
 
     import backend.services.agent.agent as agent_mod
 
-    # 拦截 usage（Agent.run 本身不返回），按 ContextVar 分发给当前视频任务
-    _orig = agent_mod.gateway.chat_with_tools
+    # 拦截 usage（Agent.run 不返回），按 ContextVar 分发给当前视频任务。
+    # ★ 必须拦 chat_with_tools_stream：Agent 现在只有流式这一条循环
+    #   （Agent.run 已改为委托 run_stream），拦非流式版本会一条都收不到、
+    #   成本数字全变 0。usage 在 "done" 事件里，要转发事件本身、只顺带记账。
+    _orig = agent_mod.gateway.chat_with_tools_stream
 
     async def patched(*a, **kw):
-        msg, usage = await _orig(*a, **kw)
-        sink = _usage_sink.get()
-        if sink is not None:
-            sink.append(usage)
-        return msg, usage
+        async for ev in _orig(*a, **kw):
+            if ev.get("type") == "done":
+                sink = _usage_sink.get()
+                if sink is not None:
+                    sink.append(ev.get("usage") or {})
+            yield ev
 
-    agent_mod.gateway.chat_with_tools = patched
+    agent_mod.gateway.chat_with_tools_stream = patched
 
     dataset = json.load(open(DATASET, encoding="utf-8"))
     log_path = setup_eval_log("eval_v4_agent")

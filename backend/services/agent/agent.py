@@ -10,6 +10,7 @@
     result = await agent.run(user_message, context)
     # result = {"answer": str, "steps": int, "tool_calls": [...]}
 """
+import asyncio
 import json
 import uuid
 
@@ -36,39 +37,56 @@ def _log_trace(session_id: str, video_id: str, step: int, event_type: str,
     try:
         from backend.services.trace_service import log_trace
         log_trace(session_id, video_id, step, event_type, content, tool_name)
-    except Exception:
-        pass
+    except Exception as e:
+        # 轨迹库坏了不能影响主流程，但也不能完全没声音 —— 否则排查时
+        # 会以为"没有轨迹"是正常的
+        logger.debug(f"轨迹记录失败（不影响问答）: {type(e).__name__}: {e}")
 
 
 # ── 高危操作确认管理（human-in-the-loop）──────────────────
 # 工具执行前请求用户批准：run_stream 推送 confirm 事件并阻塞等待，
 # 前端调 /api/approve 接口唤醒。
-import asyncio
+#
+# 已知限制：confirm_id 是全局命名空间，任何拿到 id 的客户端都能 approve。
+# 单用户应用可接受；多用户前必须绑定会话（session_id 已存进 entry，待接入校验）。
+_pending_confirmations: dict = {}  # confirm_id -> {"event", "approved", "message", "session_id"}
 
-_pending_confirmations: dict = {}  # confirm_id -> {"event": asyncio.Event, "approved": bool, "message": str}
 
+def _new_confirmation(message: str, session_id: str = None) -> str:
+    """创建一条待确认请求，返回 confirm_id。
 
-def _new_confirmation(message: str) -> str:
-    """创建一条待确认请求，返回 confirm_id"""
+    session_id 一并存下，供将来做会话绑定（见文末说明）。
+    """
     confirm_id = uuid.uuid4().hex[:12]
     _pending_confirmations[confirm_id] = {
         "event": asyncio.Event(),
         "approved": False,
         "message": message,
+        "session_id": session_id,
     }
     return confirm_id
 
 
-async def _wait_confirmation(confirm_id: str, timeout: float = 120.0) -> bool:
-    """阻塞等待用户确认，返回是否批准（超时默认拒绝）"""
+async def _wait_confirmation(confirm_id: str, timeout: float = 120.0) -> str:
+    """阻塞等待用户确认，返回 "approved" / "denied" / "timeout"。
+
+    **返回三态而不是 bool**：超时和明确拒绝是两回事。用户可能只是离开了，
+    若都返回 False 并统一写成"用户拒绝了"，模型会以为这个方向被用户否定，
+    后续对话方向被带偏。
+
+    **清理**：原来只在 `_resolve_confirmation` 里 pop，超时的条目永远留在字典里
+    （只进不出，长期运行内存泄漏）。这里在 finally 里统一清理，两条路径都覆盖。
+    """
     entry = _pending_confirmations.get(confirm_id)
     if not entry:
-        return False
+        return "denied"
     try:
         await asyncio.wait_for(entry["event"].wait(), timeout=timeout)
+        return "approved" if entry["approved"] else "denied"
     except asyncio.TimeoutError:
-        return False
-    return entry["approved"]
+        return "timeout"
+    finally:
+        _pending_confirmations.pop(confirm_id, None)
 
 
 def _resolve_confirmation(confirm_id: str, approved: bool) -> bool:
@@ -78,6 +96,7 @@ def _resolve_confirmation(confirm_id: str, approved: bool) -> bool:
         return False
     entry["approved"] = approved
     entry["event"].set()
+    # 这里 pop 是幂等的兜底：等待方持有 entry 引用，pop 之后仍能读到 approved。
     _pending_confirmations.pop(confirm_id, None)
     return True
 
@@ -164,57 +183,35 @@ class Agent:
         return messages
 
     async def run(self, user_message: str, context: dict) -> dict:
-        """执行 agent loop，返回 {"answer", "steps", "tool_calls"}"""
-        messages = await self._build_messages(user_message, context)
-        tool_call_log = []
-        session_id = _new_session()
-        video_id = context.get("video_id")
-        _log_trace(session_id, video_id, 0, "user", user_message)
+        """非流式便捷封装：抽干 run_stream，只取最终结果。
 
-        for step in range(1, self.max_iterations + 1):
-            message, usage = await gateway.chat_with_tools(
-                messages,
-                system_prompt=self.system_prompt,
-                tools=self.tools_openai,
-                smart=self.smart,
-                video_id=video_id,      # 记账在网关做，这里只负责把视频归因传下去
-            )
+        ★ 循环逻辑**只有 run_stream 一份**。
 
-            # 无工具调用 → 最终答案
-            if not message["tool_calls"]:
-                _log_trace(session_id, video_id, step, "answer", message["content"])
-                return {
-                    "answer": message["content"],
-                    "steps": step,
-                    "tool_calls": tool_call_log,
-                }
+        这个方法过去是一份**独立复制的循环**，与 run_stream 约 70% 重复，
+        而确认机制、异常处理、参数解析只存在于 run_stream 里。于是它成了一个
+        「看起来还能用」的高危入口：
 
-            # 记录本轮 tool_calls 并构造 assistant 消息
-            tool_calls = message["tool_calls"]
-            tool_call_log.extend([tc["name"] for tc in tool_calls])
-            messages.append(self._assistant_message(message))
+        - 从不检查 `requires_confirmation` → 误用会**静默执行** delete_file / 覆盖文件
+        - `json.loads` 无 try、网关异常直接上抛（run_stream 转成 error 事件）
+        - 评测 V4 走的就是它 → **测的不是产品实际运行的代码**
 
-            # 逐个执行工具，结果作为 tool 消息回填
-            for tc in tool_calls:
-                _log_trace(session_id, video_id, step, "tool_call",
-                           json.dumps({"name": tc["name"], "arguments": tc["arguments"]}, ensure_ascii=False),
-                           tool_name=tc["name"])
-                result = await self._execute_tool(tc, context)
-                result = await self._compress_tool_result(user_message, tc["name"], result)
-                _log_trace(session_id, video_id, step, "tool_result", result, tool_name=tc["name"])
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": result,
-                })
+        改为委托后上面三条一次性消解，且调用方（评测 V4、MemoryAgent）无需改动：
+        它们拿到的仍是同一个 `{"answer","steps","tool_calls"}` 契约，
+        但背后跑的是产品真正在用的那条循环。
 
-        logger.warning(f"Agent 达到最大迭代轮次 {self.max_iterations}，强制结束")
-        _log_trace(session_id, video_id, self.max_iterations, "error", "达到最大迭代轮次")
-        return {
-            "answer": "抱歉，这个问题比较复杂，我尝试了多次仍未完成。请换一种方式提问。",
-            "steps": self.max_iterations,
-            "tool_calls": tool_call_log,
-        }
+        需要看中间过程（工具调用、确认请求）时请直接用 run_stream。
+        """
+        answer, steps, tool_calls = "", 0, []
+        async for ev in self.run_stream(user_message, context):
+            t = ev.get("type")
+            if t == "error":
+                # 保持旧契约：非流式调用方按异常处理
+                raise RuntimeError(ev["message"])
+            if t == "done":
+                answer = ev["answer"]
+                steps = ev["steps"]
+                tool_calls = ev["tool_calls"]
+        return {"answer": answer, "steps": steps, "tool_calls": tool_calls}
 
     async def run_stream(self, user_message: str, context: dict):
         """流式 agent loop，yield 事件 dict：
@@ -228,6 +225,8 @@ class Agent:
         session_id = _new_session()
         video_id = context.get("video_id")
         _log_trace(session_id, video_id, 0, "user", user_message)
+        empty_retried = False      # 空答案只重试一次，避免死循环
+        last_tool_sig = None       # 上一轮 (工具名, 参数) 签名，用于识别重复调用
 
         for step in range(1, self.max_iterations + 1):
             full_content = ""
@@ -252,31 +251,86 @@ class Agent:
 
             # 无工具调用 → 最终答案（content 已流式 yield）
             if not tool_calls:
-                _log_trace(session_id, video_id, step, "answer", full_content)
-                yield {"type": "done", "answer": full_content, "steps": step, "tool_calls": tool_call_log}
+                # 空答案守卫：既无 tool_calls 也无 content 时，原样返回会让前端
+                # 显示一片空白。视为异常轮次重试一次，仍空才如实说明。
+                if not full_content.strip() and not empty_retried:
+                    empty_retried = True
+                    logger.warning("模型返回空答案且无工具调用，重试一次")
+                    _log_trace(session_id, video_id, step, "error", "空答案，重试")
+                    messages.append({"role": "user",
+                                     "content": "你上一次没有给出任何内容。请直接回答问题。"})
+                    continue
+                answer = full_content.strip() or "抱歉，我这次没能生成有效回答，请再试一次。"
+                _log_trace(session_id, video_id, step, "answer", answer)
+                yield {"type": "done", "answer": answer, "steps": step, "tool_calls": tool_call_log}
                 return
 
             # 工具轮：推送工具状态并执行
-            tool_call_log.extend([tc["name"] for tc in tool_calls])
+            # 带参数摘要：只存工具名的话，排查时看到"调了 analyze_frame 三次"
+            # 却不知道看的是哪三帧，还得去翻 trace 库
+            tool_call_log.extend(
+                f'{tc["name"]}({tc["arguments"][:80]})' if tc.get("arguments") else tc["name"]
+                for tc in tool_calls)
             messages.append(self._assistant_message({"content": full_content, "tool_calls": tool_calls}))
+
+            # 重复调用检测：同一批 (工具名, 参数) 与上一轮完全相同，说明模型在原地打转
+            # （画面题历史上曾对同一题扫 44 次）。提示它基于已有信息作答，而不是
+            # 干等到 max_iterations 耗尽 —— 每轮都是完整上下文的 token + 延迟。
+            sig = tuple(sorted((tc["name"], tc["arguments"]) for tc in tool_calls))
+            if sig == last_tool_sig:
+                messages.append({
+                    "role": "user",
+                    "content": "你刚刚用完全相同的参数重复调用了同一个工具，结果不会有变化。"
+                               "请基于已经拿到的信息直接作答，或换一个完全不同的思路。",
+                })
+                logger.info("检测到重复工具调用，已提示模型改变策略")
+            last_tool_sig = sig
             for tc in tool_calls:
                 _log_trace(session_id, video_id, step, "tool_call",
                            json.dumps({"name": tc["name"], "arguments": tc["arguments"]}, ensure_ascii=False),
                            tool_name=tc["name"])
                 yield {"type": "tool", "name": tc["name"]}
 
+                # 参数解析失败不能让整个流崩掉：模型输出截断/畸形 JSON 实际会发生，
+                # 而这里原来只 catch 了网关的 RuntimeError，JSONDecodeError 会直接冲出生成器。
+                try:
+                    arguments = json.loads(tc["arguments"]) if tc["arguments"] else {}
+                    if not isinstance(arguments, dict):
+                        raise ValueError(f"参数应为 JSON 对象，实为 {type(arguments).__name__}")
+                except (json.JSONDecodeError, ValueError) as e:
+                    result = (f"参数解析失败（{str(e)[:80]}）：工具参数不是合法 JSON 对象，"
+                              f"请按 schema 重新调用。")
+                    _log_trace(session_id, video_id, step, "tool_result", result, tool_name=tc["name"])
+                    messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
+                    continue
+
                 # 高危操作（覆盖文件、删除文件等）需用户确认。
                 # 必须用 find_tool 而不是 get_tool：确认判断和实际执行要是**同一个对象**，
                 # 否则可能出现「拿 A 判断不用确认、却用 B 去执行」——
                 # 一个 requires_confirmation=True 的工具会被静默跳过确认。
+                #
+                # 确认钩子收 dict 而**不是 `**arguments` 展开**：展开会把模型可控的
+                # JSON 键变成关键字参数，模型只要传 {"self": ...} 就会
+                # `TypeError: got multiple values for argument 'self'`，整个流中断。
                 tool = self.find_tool(tc["name"])
-                arguments = json.loads(tc["arguments"]) if tc["arguments"] else {}
-                if tool is not None and tool.requires_confirmation(**arguments):
-                    message = tool.confirm_message(**arguments)
-                    confirm_id = _new_confirmation(message)
-                    yield {"type": "confirm", "confirm_id": confirm_id, "tool": tc["name"], "message": message}
-                    if await _wait_confirmation(confirm_id):
+                verdict = "n/a"
+                if tool is not None and tool.requires_confirmation(arguments):
+                    message = tool.confirm_message(arguments)
+                    confirm_id = _new_confirmation(message, session_id)
+                    # try/finally 包住 yield：客户端在收到确认请求后立刻断开时，
+                    # 生成器会被 close，不清理的话这条确认就永远留在字典里
+                    try:
+                        yield {"type": "confirm", "confirm_id": confirm_id,
+                               "tool": tc["name"], "message": message}
+                        verdict = await _wait_confirmation(confirm_id)
+                    finally:
+                        _pending_confirmations.pop(confirm_id, None)
+
+                    if verdict == "approved":
                         result = await self._execute_tool(tc, context)
+                    elif verdict == "timeout":
+                        # 超时 ≠ 明确拒绝，文案必须区分（见 _wait_confirmation 说明）
+                        result = f"未在时限内收到用户确认，操作已跳过：{tc['name']}"
                     else:
                         result = f"用户拒绝了该操作：{tc['name']}"
                 else:
@@ -286,12 +340,37 @@ class Agent:
                 _log_trace(session_id, video_id, step, "tool_result", result, tool_name=tc["name"])
                 messages.append({"role": "tool", "tool_call_id": tc["id"], "content": result})
 
-        _log_trace(session_id, video_id, self.max_iterations, "error", "达到最大迭代轮次")
+        # ── 迭代耗尽兜底 ──
+        # 原来直接返回写死的道歉，把前 N 轮收集的工具结果全部作废。用户白等，
+        # 成本也白花。这里追加**一次不带 tools 的调用**，让模型基于已经拿到的
+        # 材料尽力作答；真的答不出，它自己会说"信息不足"，比我们替它放弃好。
+        _log_trace(session_id, video_id, self.max_iterations, "error", "达到最大迭代轮次，改为基于已有信息作答")
+        logger.warning(f"Agent 达到最大迭代轮次 {self.max_iterations}，改为基于已有信息作答")
+        try:
+            final = ""
+            async for event in gateway.chat_with_tools_stream(
+                messages,
+                system_prompt=self.system_prompt,
+                tools=None,             # ★ 不给工具，逼它直接作答
+                smart=self.smart,
+                video_id=video_id,
+            ):
+                if event["type"] == "content":
+                    final += event["delta"]
+                    yield {"type": "content", "delta": event["delta"]}
+            answer = final.strip() or (
+                "抱歉，我调用了多次工具仍未收集到足够信息，无法可靠回答这个问题。"
+                "可以试着把问题问得更具体一些。")
+        except Exception as e:
+            logger.warning(f"迭代耗尽后的兜底作答失败：{e}")
+            answer = ("抱歉，这个问题比较复杂，我尝试了多次仍未完成。请换一种方式提问。")
+
         yield {
             "type": "done",
-            "answer": "抱歉，这个问题比较复杂，我尝试了多次仍未完成。请换一种方式提问。",
+            "answer": answer,
             "steps": self.max_iterations,
             "tool_calls": tool_call_log,
+            "exhausted": True,
         }
 
     @staticmethod

@@ -81,11 +81,16 @@ class Tool:
         """
         raise NotImplementedError
 
-    def requires_confirmation(self, **kwargs) -> bool:
-        """是否为高危操作、执行前需要用户批准。默认不需要。"""
+    def requires_confirmation(self, args: dict) -> bool:
+        """是否为高危操作、执行前需要用户批准。默认不需要。
+
+        `args` 是模型给出的工具参数（已解析为 dict），**不要用 `**args` 展开**：
+        参数键由模型控制，展开后 `{"self": ...}` 这类保留键会变成
+        `TypeError: got multiple values for argument`，把整条流打断。
+        """
         return False
 
-    def confirm_message(self, **kwargs) -> str:
+    def confirm_message(self, args: dict) -> str:
         """需要确认时，展示给用户的提示语。"""
         return f"即将执行 {self.name}，是否继续？"
 
@@ -242,7 +247,7 @@ class WriteFileTool(Tool):
             f.write(content)
         return f"已写入文件：{filename}"
 
-    def requires_confirmation(self, filename: str = "", **kwargs) -> bool:
+    def requires_confirmation(self, args: dict) -> bool:
         """覆盖已有文件时需用户确认。
 
         路径判断必须与 run() 用**同一套**校验：原来这里用裸 os.path.join 判断存在性，
@@ -250,6 +255,7 @@ class WriteFileTool(Tool):
         未校验路径上。将来若在确认逻辑里加"预览旧内容"之类的读操作，这里就变成穿越读。
         """
         import os
+        filename = (args or {}).get("filename", "")
         if not filename:
             return False
         try:
@@ -259,8 +265,8 @@ class WriteFileTool(Tool):
             return False
         return os.path.exists(path)
 
-    def confirm_message(self, filename: str = "", **kwargs) -> str:
-        return f"即将覆盖笔记文件「{filename}」，是否继续？"
+    def confirm_message(self, args: dict) -> str:
+        return f"即将覆盖笔记文件「{(args or {}).get('filename', '')}」，是否继续？"
 
 
 class ReadFileTool(Tool):
@@ -352,12 +358,13 @@ class DeleteFileTool(Tool):
         os.remove(path)
         return f"已删除文件：{filename}（备份保留为 {os.path.basename(bak)}）"
 
-    def requires_confirmation(self, **kwargs) -> bool:
+    def requires_confirmation(self, args: dict) -> bool:
         """删除文件总是高危操作，需用户确认"""
         return True
 
-    def confirm_message(self, filename: str = "", **kwargs) -> str:
-        return f"即将删除笔记文件「{filename}」，此操作不可撤销，是否继续？"
+    def confirm_message(self, args: dict) -> str:
+        return (f"即将删除笔记文件「{(args or {}).get('filename', '')}」，"
+                f"此操作不可撤销，是否继续？")
 
 
 class SaveMemoryTool(Tool):
