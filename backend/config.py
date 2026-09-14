@@ -133,6 +133,21 @@ FFMPEG_PATH = _ffmpeg_env if os.path.exists(_ffmpeg_env) or _ffmpeg_env == "ffmp
 # RAG 配置
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))  # 检索返回的chunk数量
 
+# 全量字幕注入的阈值（估算 token）。
+# 字幕短于它 → 整段注入 messages；超长 → 退回 RAG 检索。
+# 依据是评测结论：全量注入对 RAG 质量 12 项胜 9 / 负 1 / 平 2，
+# 且整段字幕是稳定前缀、命中缓存后**等效成本只有 RAG 的 35%**。
+#
+# ★ 必须显著小于 CONTEXT_MAX_TOKENS(80000)：那个数只统计 DB 里的历史对话
+#   （见 conversation_service 的四层压缩），**算不到注入的字幕** ——
+#   留不出余量就只能等厂商 API 报上下文超限。
+#
+# 30000 是实测标定的：评测集 8 个视频字幕在 2,482~5,750 token（中位 4,090），
+# 对最大的一条有 5.2× 余量；覆盖到约 1.5 小时的讲座；
+# 3 小时课程（≈54,000）会被正确挡住，退回 RAG。占预算的 37.5%。
+# 设为 0 可关闭全量注入，产品行为退回纯 RAG。
+FULL_CONTEXT_MAX_TOKENS = int(os.getenv("FULL_CONTEXT_MAX_TOKENS", "30000"))
+
 # 上下文压缩配置（四层策略）
 CONTEXT_MAX_MESSAGES = int(os.getenv("CONTEXT_MAX_MESSAGES", "50"))       # 第1层：最大消息数
 CONTEXT_MAX_TOKENS = int(os.getenv("CONTEXT_MAX_TOKENS", "80000"))       # 80% 窗口

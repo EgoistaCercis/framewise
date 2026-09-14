@@ -103,7 +103,12 @@ class Tool:
 class RagAnswerTool(Tool):
     """检索视频字幕，返回相关片段（不生成最终答案，交给 Agent 组织）"""
     name = "rag_answer"
-    description = "当用户询问视频内容相关的问题、需要从视频字幕中找答案时调用。检索并返回带时间戳的相关字幕片段。"
+    # ★ 描述必须说清「仅当字幕未被完整提供时」：
+    #   现在短字幕会整段注入 <transcript>，此时再检索纯属重复劳动（多一轮延迟 + 一次 embedding）。
+    #   长视频（超 config.FULL_CONTEXT_MAX_TOKENS）才不会注入，那时这个工具是唯一通道。
+    description = ("检索视频字幕，返回带时间戳的相关片段。"
+                   "**仅当消息里没有 <transcript> 标签（即字幕未被完整提供）时才调用**；"
+                   "若已有 <transcript>，字幕已完整在手，直接依据它回答，不要调用本工具。")
     parameters = {
         "type": "object",
         "properties": {
@@ -126,7 +131,10 @@ class RagAnswerTool(Tool):
         query_embedding = await embed_single(question, video_id=context.get("video_id"))
         # faiss 是同步 CPU 调用，直接 await 会阻塞事件循环 ——
         # 评测侧三个脚本已改 to_thread，这里之前漏了，两边行为不一致
-        results = await asyncio.to_thread(search, index, meta, query_embedding, top_k=5)
+        # top_k 走配置：原先是硬编码 5，与 rag_service 用的 RAG_TOP_K 脱钩，
+        # 改了配置这一侧不跟着变（同一个检索两套参数）
+        from backend.config import RAG_TOP_K
+        results = await asyncio.to_thread(search, index, meta, query_embedding, top_k=RAG_TOP_K)
         if not results:
             return "未检索到相关字幕内容"
         parts = []

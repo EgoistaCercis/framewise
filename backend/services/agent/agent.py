@@ -142,6 +142,77 @@ def _fmt_ts(seconds: float) -> str:
     return f"{s // 60:02d}:{s % 60:02d}"
 
 
+def _estimate_tokens(text: str) -> int:
+    """粗略估算 token 数。
+
+    与 conversation_service._estimate_tokens 同口径（中文约 1 token / 1.5 字）——
+    全仓库没有 tokenizer，这里只为一次阈值判断，不值得引入新依赖。
+    """
+    return int(len(text) / 1.5)
+
+
+def _format_transcript(subtitles: list) -> str:
+    """字幕 → 带时间戳的紧凑文本（合并成 ~CHUNK_MAX_LENGTH 字的块）。
+
+    输出格式与 evaluation/eval_full_context.py 的 format_transcript 一致
+    （`【MM:SS~MM:SS】合并后的文本`），但数据源是产品侧的字幕结构
+    （字段是 text/start/end，注意与 RAG chunk 的 start_time/end_time 不同）。
+
+    ★ 必须**确定性**：同一个视频每次都要产出完全一致的字节 ——
+      这段文本会成为 messages 里最长、最稳定的前缀，只要有一个字节变化，
+      厂商侧的前缀缓存就整段失效，全量注入的成本优势（比 RAG 省 65%）直接归零。
+      所以这里不做任何按轮次变化的加工：不加序号、不加时间、不排序。
+    """
+    if not subtitles:
+        return ""
+    lines, buf, start = [], [], None
+    for s in subtitles:
+        if start is None:
+            start = s.get("start", 0) or 0
+        buf.append(s.get("text", ""))
+        if sum(len(x) for x in buf) >= config.CHUNK_MAX_LENGTH:
+            lines.append(f"【{_fmt_ts(start)}~{_fmt_ts(s.get('end', start) or start)}】"
+                         f"{''.join(buf)}")
+            buf, start = [], None
+    if buf:
+        end = subtitles[-1].get("end", start or 0) or (start or 0)
+        lines.append(f"【{_fmt_ts(start or 0)}~{_fmt_ts(end)}】{''.join(buf)}")
+    return "\n".join(lines)
+
+
+def _load_transcript_context(context: dict) -> str:
+    """取整段字幕并拼成文本；取不到就返回 ""（调用方据此退回 RAG 检索）。
+
+    来源按优先级：
+      1. `context["_state"]["subtitles"]` —— 内存副本，零 I/O（评测脚本走这条）
+      2. `load_subtitle_cache(video_hash)` —— 盘上缓存
+
+    ⚠️ 一律用 `context["video_hash"]` 而不是 `video_id` 去拼缓存路径：
+       URL 模式下两者恰好相等，但**上传模式下 video_hash 是文件 MD5**，
+       用 video_id 会永远读不到字幕、静默退回 RAG。
+    """
+    state = context.get("_state") or {}
+    subs = state.get("subtitles")
+    if subs:
+        return _format_transcript(subs)
+
+    video_hash = context.get("video_hash")
+    if not video_hash:
+        return ""
+    try:
+        from backend.services.media.cache_service import (
+            subtitle_cache_exists, load_subtitle_cache)
+        # load_subtitle_cache 在文件不存在时会**抛异常**（不返回空表），
+        # 所以必须先 exists 判断，且整体包 try
+        if not subtitle_cache_exists(video_hash):
+            return ""
+        return _format_transcript(load_subtitle_cache(video_hash))
+    except Exception as e:
+        # 字幕读不到不是致命错误：退回 RAG 检索照样能答，不要打断整轮问答
+        logger.warning(f"读取字幕缓存失败，本次退回 RAG 检索：{type(e).__name__}: {e}")
+        return ""
+
+
 def format_player_state(context: dict) -> str:
     """把「用户在视频的哪个位置」告诉 Agent。
 
@@ -176,9 +247,34 @@ class Agent:
         self.compress_agent = CompressAgent(smart=smart)
 
     async def _build_messages(self, user_message: str, context: dict) -> list[dict]:
-        """构造初始消息列表。长期记忆与历史对话作为独立消息（XML 标签）注入，
-        保持 system prompt 稳定以命中前缀缓存。"""
+        """构造初始消息列表。字幕、长期记忆、历史对话都作为独立消息（XML 标签）注入，
+        保持 system prompt 稳定以命中前缀缓存。
+
+        消息顺序按「稳定性」排：越稳定越靠前，最长且最稳定的放最前做缓存锚点。
+
+            <transcript>    ← 整个视频不变（最稳、最长）
+            <memory>        ← 偶尔变
+            <conversation>  ← 追加式增长，前缀稳定
+            <player_state>  ← 每轮都变，固定放最后
+            用户问题
+        """
         messages = []
+
+        # 全量字幕注入：字幕短于阈值就整段给，超长/取不到则退回 RAG 检索。
+        # 依据是评测结论（全量优于 RAG：质量 12 项胜 9，缓存后成本仅 35%），
+        # 阈值存在的意义是给几小时的课程留退路（见 config.FULL_CONTEXT_MAX_TOKENS）。
+        transcript = _load_transcript_context(context)
+        if transcript and _estimate_tokens(transcript) <= config.FULL_CONTEXT_MAX_TOKENS:
+            messages.append({
+                "role": "user",
+                "content": f"<transcript>\n{transcript.strip()}\n</transcript>",
+            })
+            logger.debug(f"全量字幕注入：{_estimate_tokens(transcript)} token（阈值 "
+                         f"{config.FULL_CONTEXT_MAX_TOKENS}）")
+        elif transcript:
+            logger.info(f"字幕 {_estimate_tokens(transcript)} token 超过阈值 "
+                        f"{config.FULL_CONTEXT_MAX_TOKENS}，退回 RAG 检索")
+
         memory_text = _load_memory_context()
         if memory_text:
             messages.append({
