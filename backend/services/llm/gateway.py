@@ -148,16 +148,27 @@ _clients: dict[tuple, AsyncOpenAI] = {}
 _client_lock = asyncio.Lock()
 
 
-async def _client(cfg: dict) -> AsyncOpenAI:
-    """按 (base_url, api_key) 获取（并缓存）AsyncOpenAI 客户端，复用连接池。
+async def _client(cfg: dict, timeout: float = None) -> AsyncOpenAI:
+    """按 (base_url, api_key, timeout) 获取（并缓存）AsyncOpenAI 客户端，复用连接池。
 
     **key 必须带 api_key**：同一个 base_url 完全可能配了不同的 key ——
     `LLM_*` 与 `SMART_LLM_*` 指向同一厂商（如都用 deepseek），
     chat 与 embedding 共用同一个兼容端点。只按 base_url 缓存的话，
     后配置的一方会静默复用先入缓存的 client，**拿别人的 key 发请求**：
     轻则鉴权失败，重则静默记到另一个账号，而症状看起来完全无关（401 / 配额错乱）。
+
+    **key 也必须带 timeout**：裁判走 JUDGE_TIMEOUT（300s）、产品走 LLM_TIMEOUT（120s），
+    两者可能指向同一个端点；只按 (base_url, api_key) 缓存会让先建的那个超时值
+    静默套用到另一方（裁判被 120s 打断，或产品用户被迫等 300s）。
+
+    **max_retries=0**：SDK 自带的重试必须关掉。它与网关的 `_with_retry` 是
+    **乘法**关系（SDK 3 次 × 网关 4 次），而每次失败的代价可能是上百秒——
+    实测裁判批处理因此卡住 20 分钟以上。重试策略只保留我们显式控制的那一层，
+    报错和退避才都可观测、可调。
     """
-    key = (cfg["base_url"], cfg["api_key"])
+    if timeout is None:
+        timeout = config.LLM_TIMEOUT
+    key = (cfg["base_url"], cfg["api_key"], timeout)
     if key not in _clients:
         async with _client_lock:
             if key not in _clients:
@@ -168,7 +179,8 @@ async def _client(cfg: dict) -> AsyncOpenAI:
                 _clients[key] = AsyncOpenAI(
                     base_url=cfg["base_url"],
                     api_key=cfg["api_key"],
-                    timeout=config.LLM_TIMEOUT,
+                    timeout=timeout,
+                    max_retries=0,
                 )
     return _clients[key]
 
@@ -394,7 +406,7 @@ def translate_error(e: Exception, provider: str = "") -> str:
 async def chat(messages: list[dict], system_prompt: str = None,
                temperature: float = 0.7, max_tokens: int = None,
                smart: bool = False, judge: bool = False,
-               video_id: str = None) -> tuple[str, dict]:
+               video_id: str = None, timeout: float = None) -> tuple[str, dict]:
     """调用 LLM 对话，返回 (回答文本, usage信息)
 
     - `smart=True`：用独立的高阶模型（config.SMART_LLM_*，厂家可不同）
@@ -403,12 +415,19 @@ async def chat(messages: list[dict], system_prompt: str = None,
     - **消息里若带 `images` 字段**（base64 列表），自动路由到 `MULTIMODAL_*` 模型，
       并把该消息转成多模态 content 数组。图片放哪条消息由调用方决定（见 _expand_multimodal）。
     - video_id 仅用于把用量归到某个视频（可选；不传则只记总量）。
+    - `timeout`：**整次请求**的超时（秒），不传则用 `LLM_TIMEOUT`。默认值是按
+      **产品侧**定的（流式输出下 120s 只是"两个数据块之间"的间隔，够用且不会让
+      用户干等）。但**评测走的是非流式 `chat()`**，整段响应必须在超时内到齐 ——
+      整段视频（十几 MB）+ 长回答很容易超过 120s，于是整题被判失败。
+      所以调用性质不同就要显式传不同的值，不能全局共用一个常量。
     """
     if max_tokens is None:
         max_tokens = config.LLM_MAX_TOKENS
     has_images = any(m.get("images") or m.get("video") for m in messages)
     cfg = _chat_cfg(smart, judge, multimodal=has_images)
-    client = await _client(cfg)
+    # 裁判用更长的超时：单次判定是 12000 max_tokens 的思考型生成，
+    # 用产品侧的 120s 会在生成中途被打断（见 config.JUDGE_TIMEOUT）
+    client = await _client(cfg, config.JUDGE_TIMEOUT if judge else timeout)
 
     msgs = []
     if system_prompt:

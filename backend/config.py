@@ -52,6 +52,12 @@ JUDGE_PROVIDER = os.getenv("JUDGE_PROVIDER", "")
 JUDGE_ENDPOINT = os.getenv("JUDGE_ENDPOINT", "")
 JUDGE_API_KEY = os.getenv("JUDGE_API_KEY", "")
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", "")
+# 裁判专用超时（秒）。**必须比 LLM_TIMEOUT 大** —— 裁判一次判定是
+# "始终思考" 模型 + max_tokens=12000，实测 reasoning 就吃 4000~6500，
+# 单次生成可达 2~4 分钟，用产品侧的 120s 会在生成中途被打断。
+# 打断的代价不只是失败：被丢弃的那次**已经生成并计费**了，只是我们没等。
+# 裁判是离线批处理，没有 "用户在看屏幕" 的约束，给足时间是正确取舍。
+JUDGE_TIMEOUT = float(os.getenv("JUDGE_TIMEOUT", "300"))
 
 # 多模态模型（评测 V5 用：把画面**直接**给模型，而不是先经 VL 转成文字）。
 # 与 VISION_* 的区别：VISION_* 是「描述单帧」的辅助模型，输出文字供主模型消费；
