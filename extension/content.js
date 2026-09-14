@@ -392,6 +392,11 @@
 
     // ── B站字幕采集 ──
     var _subDone = false;
+    // 正在等播放器把字幕交出来。用户点了「字幕 → 中文」之后，B站播放器自己要先
+    // 「正在处理字幕」一段时间才把字幕文件拉下来 —— 这段时间服务端那边**确实还没有字幕**。
+    // 若此时按 no_subtitles 渲染，用户会看到「未找到该视频的字幕，可先点击播放器中的
+    // 字幕 → 中文」，而他明明刚点过（实测踩过）。所以要单独出一个中间态。
+    var _uploadingSub = false;
 
     chrome.runtime.sendMessage({ type: "inject-interceptor" }, function (resp) {
         console.log("[帧知] MAIN world 注入:", resp);
@@ -401,7 +406,9 @@
         // 字幕拦截到只上传缓存，不自动触发索引（等用户手动或autoMode）
         var url = e.detail;
         if (_subDone) return;
-        if (!videoId) { initVideo(); }
+        // 不要再在这里调 initVideo() —— uploadSubtitleUrl 内部会调，
+        // 两处都调会对 /from_url 发两次并发请求，还会让 _uploadingSub 的置位
+        // 晚于第一次 initVideo 的渲染（界面可能先闪一下「未找到字幕」）。
         console.log("[帧知] 字幕已拦截，上传缓存:", url.substring(0,80)+"...");
         // 携带真实页面 Referer，否则后端下载 ai_subtitle 会 403
         uploadSubtitleUrl(url, cleanUrl(location.href));
@@ -410,15 +417,27 @@
     function uploadSubtitleUrl(url, referer) {
         if (!url || _subDone) return;
         _subDone = true;
-        if (!videoId) { initVideo(); }
+        _uploadingSub = true;   // 进入「等播放器交字幕」窗口，期间不要渲染 no_subtitles
+        if (!videoId) { initVideo(); }   // 这一步只是去拿 videoId，界面由 _uploadingSub 兜住
         (function waitAndUpload() {
             if (!videoId) { setTimeout(waitAndUpload, 500); return; }
             fetch(API_BASE + "/api/videos/" + videoId + "/captured_subtitles_url", {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ subtitle_url: url, referer: referer || cleanUrl(location.href) }),
             }).then(function () {
-                updateStatus("📝 字幕已缓存");
-            }).catch(function () {});
+                _uploadingSub = false;
+                // ★ 这里必须主动推进界面，不能只改顶栏状态。
+                //   字幕是用户点了播放器里「字幕 → 中文」之后才拦截到的，
+                //   而此前 UI 停在 noSubtitlesState() 的「未找到字幕」面板上 ——
+                //   那条路径**不启动轮询**，所以不在这里手动切状态的话，
+                //   用户按要求点了字幕、服务器也存好了，界面却毫无变化（实测踩过）。
+                //   已经在问答中（_fwReady）就不要动消息区，免得把聊天记录冲掉。
+                if (!window._fwReady) { subtitlesState(); }
+            }).catch(function () {
+                // 上传失败 → 退出中间态，回到「未找到字幕」面板（那里有语音识别兜底）
+                _uploadingSub = false;
+                if (!window._fwReady) { noSubtitlesState(); }
+            });
         })();
     }
 
@@ -473,9 +492,11 @@
     var isOffline = false; setInterval(function () { fetch(API_BASE + "/api/health").then(function () { if (isOffline) { isOffline = false; updateStatus("✅ 已重连"); } }).catch(function () { if (!isOffline) { isOffline = true; updateStatus("⚠️ 断线"); } }); }, 10000);
 
     // ── 视频处理 ──
-    function initVideo(force) { updateStatus("⏳ 建立索引..."); updateProgress({ progress: 2, progress_text: "连接服务..." }); var body = { url: lastUrl }; if (force) body.force = true; fetch(API_BASE + "/api/videos/from_url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(function (r) { return r.json(); }).then(function (data) { videoId = data.video_id; if (data.status === "ready") { readyState(data); return; } if (data.status === "subtitles") { updateStatus("📝 字幕已缓存"); updateProgress({progress: 30, progress_text: "字幕已缓存，点击 🔄 处理"}); return; } if (data.status === "no_subtitles") { noSubtitlesState(); return; } updateStatus("⏳ 处理中..."); pollStatus(); }).catch(function (e) { updateStatus("❌ 连接失败"); }); }
-    function pollStatus() { (function check() { if (!videoId) { setTimeout(check, 3000); return; } fetch(API_BASE + "/api/videos/" + videoId).then(function (r) { return r.json(); }).then(function (data) { if (data.status === "ready") { readyState(data); return; } if (data.status === "error") { updateStatus("❌ 失败"); return; } if (data.status === "no_subtitles") { noSubtitlesState(); return; } if (data.status === "subtitles") { updateStatus("📝 字幕已缓存"); updateProgress({progress: 30, progress_text: "字幕已缓存，点击 🔄 处理"}); setTimeout(check, 2000); return; } if (data.progress) updateProgress(data); setTimeout(check, 2000); }).catch(function () { setTimeout(check, 5000); }); })(); }
+    function initVideo(force) { updateStatus("⏳ 建立索引..."); updateProgress({ progress: 2, progress_text: "连接服务..." }); var body = { url: lastUrl }; if (force) body.force = true; fetch(API_BASE + "/api/videos/from_url", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(function (r) { return r.json(); }).then(function (data) { videoId = data.video_id; if (data.status === "ready") { readyState(data); return; } if (data.status === "subtitles") { subtitlesState(); return; } if (data.status === "no_subtitles") { noSubtitlesState(); return; } updateStatus("⏳ 处理中..."); pollStatus(); }).catch(function (e) { updateStatus("❌ 连接失败"); }); }
+    function pollStatus() { (function check() { if (!videoId) { setTimeout(check, 3000); return; } fetch(API_BASE + "/api/videos/" + videoId).then(function (r) { return r.json(); }).then(function (data) { if (data.status === "ready") { readyState(data); return; } if (data.status === "error") { updateStatus("❌ 失败"); return; } if (data.status === "no_subtitles") { noSubtitlesState(); return; } if (data.status === "subtitles") { subtitlesState(); setTimeout(check, 2000); return; } if (data.progress) updateProgress(data); setTimeout(check, 2000); }).catch(function () { setTimeout(check, 5000); }); })(); }
     function noSubtitlesState() {
+        // 已经在等播放器交字幕了，就不要再让用户去点一次「字幕 → 中文」
+        if (_uploadingSub) { fetchingSubtitleState(); return; }
         updateStatus("🎙️ 未找到字幕");
         var c = document.getElementById("fw-msgs");
         c.innerHTML =
@@ -501,6 +522,34 @@
                 })
                 .catch(function () { btn.disabled = false; btn.style.opacity = "1"; btn.textContent = "🎙️ 用语音识别生成字幕"; addMsg("error", "启动语音识别失败"); });
         };
+    }
+
+    // 字幕已缓存、等用户点 🔄 开始索引。
+    // 单独成一个状态而不是复用 updateProgress：后者在 pct<40 时会贴
+    // 「💡 点击播放器中的 字幕 → 中文」的提示 —— 而走到这个状态时字幕**已经拿到了**，
+    // 再提示用户去点一次只会让人以为操作没生效。
+    // 等播放器交字幕的中间态（见 _uploadingSub 的说明）。
+    // 用户刚点完「字幕 → 中文」，播放器还在自己处理，这时候唯一正确的提示就是「稍候」。
+    function fetchingSubtitleState() {
+        updateStatus("⏳ 正在获取字幕...");
+        var c = document.getElementById("fw-msgs");
+        if (!c) return;
+        c.innerHTML =
+            '<div style="text-align:center;padding:18px 10px 12px;color:var(--fw-text-2);font-size:12px;line-height:1.9;">' +
+            '⏳ 正在获取字幕…<br/>' +
+            '<span style="font-size:11px;color:var(--fw-text-3);">播放器正在处理字幕，请稍候</span>' +
+            '</div>';
+    }
+
+    function subtitlesState() {
+        updateStatus("📝 字幕已缓存");
+        var c = document.getElementById("fw-msgs");
+        if (!c) return;
+        c.innerHTML =
+            '<div style="text-align:center;padding:18px 10px 12px;color:var(--fw-text-2);font-size:12px;line-height:1.9;">' +
+            '📝 字幕已缓存<br/>' +
+            '<span style="font-size:11px;color:var(--fw-text-3);">点击顶栏 🔄 开始建立索引</span>' +
+            '</div>';
     }
 
     function readyState(data) { window._fwReady = true; updateStatus("✅ 就绪 (" + (data.chunk_count || "?") + "片段)"); document.getElementById("fw-input").disabled = false; document.getElementById("fw-send").disabled = false; document.getElementById("fw-msgs").innerHTML = '<div style="color:var(--fw-accent);text-align:center;padding:20px 0;">✅ 视频已就绪，开始提问吧！</div>'; loadHistory(); }
