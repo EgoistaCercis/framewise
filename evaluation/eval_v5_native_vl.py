@@ -84,6 +84,10 @@ VIDEO_CONCURRENCY = int(os.getenv("EVAL_VIDEO_CONCURRENCY", "4"))
 # 无节制并发既会撞限流、也会让这两个指标失真
 GLOBAL_CONCURRENCY = int(os.getenv("EVAL_V5_GLOBAL_CONCURRENCY", "8"))
 MAX_FRAMES_PER_VIDEO = int(os.getenv("EVAL_V5_MAX_FRAMES", "64"))
+# 视频级并发闸：0 = 不限（默认，与历史行为一致）；N = **同时在跑的视频不超过 N 个**。
+# 视频是天然的检查点 —— 一批跑完就能先看结果再决定要不要继续，
+# 而不是等 8 个视频全部跑完才发现某一批整个坏掉（踩坑 #25 的流程要求）。
+VIDEO_BATCH = int(os.getenv("EVAL_V5_VIDEO_BATCH", "0"))
 
 # 实测：MULTIMODAL 模型按 260 tok/秒 采样视频（30/60/120s 三档线性吻合）
 VIDEO_TOK_PER_SEC = 260
@@ -295,7 +299,8 @@ async def ask_one(video_id: str, state: dict, case: dict, transcript: str,
             #   实际打向端点的并发仍是 VIDEO_CONCURRENCY × 视频数。
             async with _global_sem:
                 ans, usage = await chat(messages=msgs, system_prompt=SYSTEM_PROMPT,
-                                        max_tokens=LLM_MAX_TOKENS, video_id=video_id)
+                                        max_tokens=LLM_MAX_TOKENS, video_id=video_id,
+                                        timeout=args.timeout)
             gen_err = None
         except Exception as e:
             ans, usage = f"[异常] {type(e).__name__}: {str(e)[:150]}", {}
@@ -426,6 +431,18 @@ async def main():
     ap.add_argument("--video-width", type=int, default=640, help="video 模式的视频宽度")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--videos", type=int, default=0, help="只跑前 N 个视频（冒烟用）")
+    ap.add_argument("--only-videos", default="",
+                    help="只跑名字/id 含这些子串的视频，逗号分隔（补跑用）。"
+                         "例：--only-videos d7c8a5aa25af,爬楼梯")
+    ap.add_argument("--merge-into", default="",
+                    help="把本次结果合并进这个已存在的结果文件（同一视频的记录会被替换）。"
+                         "补跑时必须用，否则会把整份结果覆盖成只剩补跑的那几个视频。")
+    ap.add_argument("--timeout", type=float, default=600.0,
+                    help="单次 chat 请求的超时（秒），默认 600。"
+                         "**评测走非流式**：整段响应必须在超时内到齐，而 video 档要上传"
+                         "十几 MB 的整段视频，产品侧的 120s（LLM_TIMEOUT）根本不够 ——"
+                         "实测 13MB 级的视频整题超时失败，白烧 4 次重试 × 120s。"
+                         "产品侧走流式，120s 只是块间隔，不受此影响。")
     args = ap.parse_args()
 
     from backend.config import MULTIMODAL_MODEL, MULTIMODAL_ENDPOINT, MULTIMODAL_API_KEY
@@ -450,11 +467,76 @@ async def main():
     _global_sem = asyncio.Semaphore(GLOBAL_CONCURRENCY)
     videos = dataset["videos"][: args.videos] if args.videos else dataset["videos"]
 
+    # 补跑：只挑出指定的视频。名字里带 emoji/空格，所以用**子串**匹配而不是全等。
+    if args.only_videos:
+        keys = [s.strip() for s in args.only_videos.split(",") if s.strip()]
+        videos = [v for v in videos
+                  if any(k in v["name"] or k == v["video_id"] for k in keys)]
+        if not videos:
+            raise SystemExit(f"--only-videos 没匹配到任何视频：{keys}")
+        print(f"补跑模式：只跑 {len(videos)} 个视频 "
+              f"（{', '.join(v['name'][:16] for v in videos)}）")
+
     print(f"模式={args.mode} 模型={MULTIMODAL_MODEL} 视频数={len(videos)} "
-          f"裁判口径={args.judge_context}")
+          f"裁判口径={args.judge_context} "
+          f"视频并发={VIDEO_BATCH or '不限'} 请求并发={GLOBAL_CONCURRENCY}")
+
+    # 视频级闸门（见 VIDEO_BATCH 说明）：不设就是原行为 —— 所有视频一起 gather。
+    v_sem = asyncio.Semaphore(VIDEO_BATCH) if VIDEO_BATCH else None
+    done = [0]
+
+    # ★ 增量落盘：每完成一个视频就把「已完成部分」原子写进 .partial.json。
+    #   原实现只在**全部跑完（含裁判）之后**写一次 —— 中途任何卡住/中断都会让
+    #   已经生成、已经计费的全部回答一起蒸发。实测裁判阶段卡在重试里 20 分钟时，
+    #   唯一的选择是整批重跑（80 题全部重生成 + 重新裁判）。
+    #   有了 partial，最坏情况只损失卡住的那一题。
+    partial_path = os.path.join(BASE, "evaluation", f"results_v5_{args.mode}.partial.json")
+    partial = {"videos": [], "failed": []}
+    partial_lock = asyncio.Lock()
+
+    def _safe_rec(r):
+        """与最终产物同口径：不落 context / judge_images（图片 b64 会让文件爆掉）"""
+        return {k: v for k, v in r.items() if k not in ("context", "judge_images")}
+
+    async def _dump_partial():
+        async with partial_lock:
+            tmp = partial_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump({"mode": args.mode, "partial": True,
+                           "judge_context": args.judge_context,
+                           "videos": [{"video_name": m["video_name"],
+                                       "records": [_safe_rec(r) for r in m["records"]]}
+                                      for m in partial["videos"]],
+                           "failed_videos": partial["failed"]},
+                          fh, ensure_ascii=False, indent=2)
+            os.replace(tmp, partial_path)       # 原子替换：崩溃不会留下半个文件
+
+    async def _finish(v, r):
+        done[0] += 1
+        partial["videos"].append(r)
+        await _dump_partial()
+        print(f"  ✓ 视频完成：{v['name'][:20]} → {len(r['records'])} 题"
+              f"（{done[0]}/{len(videos)}）已增量落盘", flush=True)
+        return r
+
+    async def _run_one(v):
+        """跑一个视频 + 增量落盘；失败也落盘（否则 partial 里的 failed 列表是空的）"""
+        try:
+            r = await run_video(v, args)
+        except BaseException as e:
+            done[0] += 1
+            partial["failed"].append(f"{v['name']}: {type(e).__name__}: {e}")
+            await _dump_partial()
+            print(f"  ✗ 视频级失败：{v['name'][:20]}"
+                  f"（{done[0]}/{len(videos)} 个视频已结束）", flush=True)
+            raise
+        return await _finish(v, r)
 
     async def guarded(v):
-        return await run_video(v, args)
+        if v_sem is None:                 # 不限并发：行为与历史一致，但仍然增量落盘
+            return await _run_one(v)
+        async with v_sem:
+            return await _run_one(v)
 
     t0 = time.time()
     raw = await asyncio.gather(*[guarded(v) for v in videos], return_exceptions=True)
@@ -480,6 +562,29 @@ async def main():
     print(f"\n裁判中...（{len(todo)} 条，跳过 {len(records) - len(todo)} 条未发起）")
     sem = asyncio.Semaphore(JUDGE_CONCURRENCY)
     await asyncio.gather(*[judge_one(r, sem) for r in todo])
+
+    # ── 合并补跑结果（--merge-into）──
+    # 必须放在**裁判之后、汇总之前**：放在裁判之前的话，旧记录会被当成
+    # 「本次还没判过的」再判一遍（白烧一轮裁判钱）。
+    if args.merge_into:
+        with open(args.merge_into, encoding="utf-8") as fh:
+            old = json.load(fh)
+        rerun_names = {v["name"] for v in videos}
+        old_recs = old.get("records", [])
+        # ★ 按**题目 id** 替换，不能按视频替换：
+        #   补跑常常是「只重跑某几题」（--limit / 部分失败），
+        #   按视频丢会把同一视频里**没重跑的**那些好记录一起扔掉
+        #   （实测：--limit 1 补一题会让该视频另外 9 条凭空消失）。
+        new_ids = {r["id"] for r in records}
+        kept = [r for r in old_recs if r["id"] not in new_ids]
+        print(f"合并 {args.merge_into}：替换 {len(old_recs) - len(kept)} 条旧记录，"
+              f"保留 {len(kept)} 条")
+        records = kept + records
+        video_metas = [m for m in old.get("video_metas", [])
+                       if m.get("video_name") not in rerun_names] + video_metas
+        # 补跑成功的视频要从旧的失败名单里摘掉
+        failed_videos = [f for f in old.get("cost", {}).get("failed_videos", [])
+                         if not any(n in f for n in rerun_names)] + failed_videos
 
     # ── 汇总（gen_error / judge_error 一律剔除）──
     from collections import defaultdict
