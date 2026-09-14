@@ -48,6 +48,17 @@ extension/帧知.png
 # 架构图等文档快照不提交，但保留 images 目录里的图片
 docs/*
 !docs/images/
+# 架构图要随仓库发布 —— README 里直接链接了 HTML，忽略掉它链接在 GitHub 上就是 404。
+# 规格 JSON 一并入库，贡献者才能重新生成/迭代这张图。
+!docs/framewise-architecture.json
+!docs/framewise-architecture.html
+# visual-check 的截图与回执是本机跑出来的验收证据，不入库
+docs/*.visual-check.*
 
 # 评测运行日志（运行产物，不入库）
 evaluation/logs/
+
+# 跑批中间产物：增量落盘的半成品 / 补跑前的手工备份。
+# 都不入库 —— partial 每次跑批都会被覆盖，bak 是本地排障用的。
+evaluation/*.partial.json
+evaluation/*.json.bak*

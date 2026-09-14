@@ -1,0 +1,330 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "FrameWise 帧知 · 视频学习 Agent",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/EgoistaCercis/framewise",
+      "revision": "33b4b271e2ab6680d115d8757a24b293da634822"
+    }
+  },
+  "layout": {
+    "mode": "grid",
+    "cols": 5,
+    "cellW": 150,
+    "cellH": 74,
+    "gapX": 45,
+    "gapY": 62
+  },
+  "components": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "用户端",
+      "sublabel": "Chrome 扩展 / Web",
+      "tag": "SSE 流式",
+      "row": 1,
+      "col": 0,
+      "sources": [
+        {
+          "path": "extension/content.js"
+        },
+        {
+          "path": "frontend/static/index.html"
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "FastAPI 服务",
+      "sublabel": "backend/main.py",
+      "tag": "REST + SSE",
+      "row": 1,
+      "col": 1,
+      "sources": [
+        {
+          "path": "backend/main.py"
+        },
+        {
+          "path": "backend/config.py"
+        }
+      ]
+    },
+    {
+      "id": "agent",
+      "type": "backend",
+      "label": "Agent 主循环",
+      "sublabel": "services/agent/agent.py",
+      "tag": "ReAct + 流式",
+      "row": 1,
+      "col": 2,
+      "sources": [
+        {
+          "path": "backend/services/agent/agent.py"
+        }
+      ]
+    },
+    {
+      "id": "gateway",
+      "type": "backend",
+      "label": "模型网关",
+      "sublabel": "services/llm/gateway.py",
+      "tag": "四路模型路由",
+      "row": 1,
+      "col": 3,
+      "sources": [
+        {
+          "path": "backend/services/llm/gateway.py"
+        }
+      ]
+    },
+    {
+      "id": "models",
+      "type": "external",
+      "label": "模型提供方",
+      "sublabel": "对话 / 多模态 / 向量 / 语音",
+      "tag": "DeepSeek · Qwen-VL · GLM",
+      "row": 1,
+      "col": 4
+    },
+    {
+      "id": "tools",
+      "type": "backend",
+      "label": "工具集",
+      "sublabel": "services/agent/tools.py",
+      "tag": "7 主工具 + 3 记忆工具",
+      "row": 0,
+      "col": 1,
+      "sources": [
+        {
+          "path": "backend/services/agent/tools.py"
+        }
+      ]
+    },
+    {
+      "id": "subagents",
+      "type": "backend",
+      "label": "子代理",
+      "sublabel": "记忆 / 压缩",
+      "tag": "memory · compress",
+      "row": 0,
+      "col": 3,
+      "sources": [
+        {
+          "path": "backend/services/agent/compress_agent.py"
+        },
+        {
+          "path": "backend/services/agent/memory_agent.py"
+        }
+      ]
+    },
+    {
+      "id": "services",
+      "type": "backend",
+      "label": "媒体与检索层",
+      "sublabel": "media · rag_pipeline",
+      "tag": "字幕 / ASR / 截帧 / FAISS",
+      "row": 2,
+      "col": 2,
+      "sources": [
+        {
+          "path": "backend/services/media/vision_service.py"
+        },
+        {
+          "path": "backend/services/rag_pipeline/rag_service.py"
+        }
+      ]
+    },
+    {
+      "id": "store",
+      "type": "database",
+      "label": "本地存储",
+      "sublabel": "data/",
+      "tag": "字幕 / 帧 / 记忆 / 轨迹",
+      "row": 2,
+      "col": 3,
+      "sources": [
+        {
+          "path": "backend/services/media/cache_service.py"
+        },
+        {
+          "path": "backend/services/memory/memory_service.py"
+        }
+      ]
+    },
+    {
+      "id": "eval",
+      "type": "backend",
+      "label": "评测体系",
+      "sublabel": "evaluation/",
+      "tag": "80 题集 · LLM-as-judge",
+      "row": 2,
+      "col": 4,
+      "sources": [
+        {
+          "path": "evaluation/dataset.json"
+        },
+        {
+          "path": "evaluation/judge.py"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "FrameWise 后端（FastAPI + Services）",
+      "wraps": [
+        "api",
+        "agent",
+        "tools",
+        "subagents",
+        "services",
+        "gateway"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "外部模型提供方",
+      "wraps": [
+        "models"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "评测体系（离线，不参与产品链路）",
+      "wraps": [
+        "eval"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "client-to-api",
+      "from": "client",
+      "to": "api",
+      "label": "HTTPS / SSE",
+      "variant": "emphasis"
+    },
+    {
+      "id": "api-to-agent",
+      "from": "api",
+      "to": "agent",
+      "label": "提问",
+      "labelAt": [
+        392,
+        272
+      ]
+    },
+    {
+      "id": "agent-to-gateway",
+      "from": "agent",
+      "to": "gateway",
+      "label": "生成",
+      "labelAt": [
+        650,
+        290
+      ]
+    },
+    {
+      "id": "gateway-to-models",
+      "from": "gateway",
+      "to": "models",
+      "label": "chat / vision"
+    },
+    {
+      "id": "agent-to-tools",
+      "from": "agent",
+      "to": "tools",
+      "label": "工具定义"
+    },
+    {
+      "id": "agent-to-subagents",
+      "from": "agent",
+      "to": "subagents",
+      "label": "压缩 / 记忆"
+    },
+    {
+      "id": "agent-to-services",
+      "from": "agent",
+      "to": "services",
+      "label": "工具执行",
+      "labelAt": [
+        540,
+        300
+      ]
+    },
+    {
+      "id": "api-to-services",
+      "from": "api",
+      "to": "services",
+      "label": "上传 / 链接",
+      "fromSide": "bottom",
+      "toSide": "left",
+      "via": [
+        [
+          295,
+          382
+        ]
+      ]
+    },
+    {
+      "id": "services-to-store",
+      "from": "services",
+      "to": "store",
+      "label": "字幕 / 帧 / 索引",
+      "labelAt": [
+        588,
+        426
+      ]
+    },
+    {
+      "id": "eval-to-gateway",
+      "from": "eval",
+      "to": "gateway",
+      "label": "复用网关",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "核心取舍：轻量视觉",
+      "items": [
+        "视觉只送「字幕 + 用户暂停的那一帧」，不送整段视频",
+        "画面题不输原生多模态：visual_only 相关性 0.872 vs 0.801",
+        "成本 ¥0.024/题 vs ¥0.198/题，延迟 15.5s vs 102.7s"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Agent 主循环",
+      "items": [
+        "ReAct loop + 流式输出，带迭代上限与兜底回答",
+        "工具集 7 个：问答 / 截帧 / 出题 / 笔记；记忆工具 3 个",
+        "危险操作走 HITL 确认；工具结果按上下文感知压缩"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "模型网关",
+      "items": [
+        "统一 OpenAI 协议，兼容任意厂商；function calling + 流式",
+        "四路路由：judge > multimodal > smart > default",
+        "前缀缓存友好布局；用量统一记账并分视频归集"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "评测体系（离线）",
+      "items": [
+        "80 题 × 8 个教育视频，5 类问题；字幕带时间戳",
+        "LLM-as-judge 走独立裁判模型，避免自评偏差",
+        "复用同一个网关，但完全不参与产品链路"
+      ]
+    }
+  ]
+}

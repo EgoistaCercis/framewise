@@ -6,6 +6,8 @@
 
 - 📝 **内容问答** — 带时间戳引用，点击跳转视频
 - 🖼️ **画面分析** — 暂停时自动截图 + 视觉理解
+- 🪶 **轻量视觉** — 只送「字幕 + 暂停那一帧」而非整段视频；
+  实测画面题不输原生多模态，成本 **1/8**、延迟 **1/6.6**（见[评测](#-评测)）
 - ❓ **主动学习** — AI 出题考察理解程度
 - 🧩 **Chrome 插件** — B站/YouTube 原生集成，全屏可用
 - 💾 **多轮对话** — 上下文记忆，跨会话持久化
@@ -75,68 +77,93 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 8123
 
 ## 🏗️ 架构
 
+> 📐 **[交互式架构图](docs/framewise-architecture.html)**（可切换浅色/深色、缩放、搜索、按关系追踪）
+
 ```
-用户 → Chrome 插件 / Web 前端
+用户 → Chrome 插件 / Web 前端（SSE 流式输出）
          ↓
-    FastAPI 网关（backend.main：CORS + 日志 + 视频状态管理）
+  FastAPI（backend/main.py：CORS + 日志 + 视频状态管理 + 笔记目录）
          ↓
-      Agent 层（services/agent/）
-      ├ 主 agent：ReAct loop，工具 = rag_answer / analyze_frame / generate_quiz / write_file / read_file
-      ├ memory agent：长期记忆（JSON cards 三层：类别 → 子类别 → 键值对）
-      └ compress agent：工具结果上下文感知压缩
+  ┌─ Agent 层（services/agent/）────────────────────────────┐
+  │  主 agent：ReAct loop（流式），多轮 + 迭代上限 + 兜底回答  │
+  │  工具集：rag_answer / analyze_frame / generate_quiz      │
+  │          write_file / read_file / list_notes / delete_file│
+  │  记忆工具：save_memory / recall_memory / delete_memory    │
+  │  ├ memory agent：长期记忆（JSON cards 三层）              │
+  │  └ compress agent：工具结果上下文感知压缩                  │
+  └──────────────────────────────────────────────────────────┘
          ↓
-     模型网关 gateway.py（统一 OpenAI 协议 + function calling + 重试 + default/smart 路由）
+  模型网关 gateway.py
+  统一 OpenAI 协议 · function calling · 流式 · 前缀缓存友好
+  四路模型路由：judge（裁判）> multimodal（图文/视频）> smart > default
          ↓
-     多模态 LLM（DeepSeek / Qwen VL / BGE-M3 / SenseVoice）
+  多模态模型（DeepSeek / Qwen-VL / GLM / BGE-M3 / SenseVoice）
 
 横向基础设施：
-  pricing（定价版本历史） · cost（用量分视频统计） · trace（轨迹落盘） · memory（记忆）
+  cost（用量分视频统计，网关统一记账） · pricing（定价版本历史）
+  trace（轨迹落盘） · memory（长期记忆存储） · cache（帧/视频缓存）
+
+评测体系（evaluation/，独立于产品运行）：
+  80 题评测集 · LLM-as-judge（独立裁判模型） · 多方案对比脚本 · 成本核算
 ```
+
+**视觉策略（本项目的核心取舍）**：不做「把整段视频丢给多模态模型」，
+而是**字幕 + 用户暂停的那一帧**。实测这一取舍在画面题上不输原生多模态
+（`visual_only` 相关性 0.872 vs 0.801），代价只有 **1/8 成本、1/6.6 延迟**。
+详见 [评测](#-评测)。
 
 ## 📁 项目结构
 
 ```
 framewise/
-├── backend/                    # FastAPI 后端
-│   ├── main.py                 # API 路由 + 应用入口 + 笔记目录接口
-│   ├── config.py               # 配置管理（.env 驱动）
-│   ├── prompts.py              # 统一提示词（主/memory/compress/agent）
+├── backend/                     # FastAPI 后端
+│   ├── main.py                  # API 路由 + 应用入口 + 视频状态管理 + 笔记目录接口
+│   ├── config.py                # 配置管理（.env 驱动，含各路模型/超时）
+│   ├── prompts.py               # 统一提示词（主 agent / memory / compress / 视觉）
 │   └── services/
-│       ├── agent/              # Agent 层
-│       │   ├── agent.py        # 主 agent（ReAct loop）
-│       │   ├── tools.py        # 工具集（rag_answer/analyze_frame/generate_quiz/write_file/read_file）
-│       │   ├── memory_agent.py # 记忆代理（save/recall/delete）
-│       │   └── compress_agent.py # 工具结果上下文感知压缩
-│       ├── llm/                # 模型网关 / 厂商 / 定价 / 用量
-│       │   ├── gateway         # OpenAI 统一网关（chat/embed/vision/asr + tool calls + 重试 + smart 路由）
-│       │   ├── provider_service# 厂商标配查询
-│       │   ├── pricing_service # 模型定价（带版本历史）
-│       │   └── cost_service    # token 用量与费用统计（分视频）
-│       ├── media/              # 多媒体摄取与理解
-│       │   ├── url_service     # 视频/字幕获取
-│       │   ├── asr_service     # 语音识别（本地 whisper）
-│       │   ├── asr_api_service # 语音识别（API）
-│       │   ├── vision_service  # 画面分析
-│       │   └── cache_service   # 文件缓存
-│       ├── rag_pipeline/       # RAG 学习问答链路
-│       │   ├── rag_service     # RAG 问答
-│       │   ├── conversation_service # 多轮对话 + 上下文压缩
-│       │   ├── embedding_service    # 向量化
-│       │   ├── vector_store    # FAISS 检索
-│       │   └── chunk_service   # 字幕切分
-│       ├── memory/             # 长期记忆存储（JSON cards 三层）
-│       │   └── memory_service
-│       └── trace_service.py    # 轨迹记录（append-only + 大内容落盘）
-├── extension/                  # Chrome 插件
-│   ├── content.js              # B站/YouTube 注入
+│       ├── agent/               # Agent 层
+│       │   ├── agent.py         # 主 agent（ReAct loop，run 是 run_stream 的薄委托）
+│       │   ├── tools.py         # 工具集 + registry + 工具结果压缩 + HITL 确认
+│       │   ├── memory_agent.py  # 记忆代理（save / recall / delete）
+│       │   └── compress_agent.py# 工具结果上下文感知压缩
+│       ├── llm/                 # 模型网关 / 厂商 / 定价 / 用量
+│       │   ├── gateway.py       # OpenAI 统一网关（chat/stream/tools/embed/vision/asr）
+│       │   │                    #   四路路由 judge > multimodal > smart > default
+│       │   ├── provider_service.py  # 厂商标配查询
+│       │   ├── pricing_service.py   # 模型定价（带版本历史）
+│       │   └── cost_service.py      # token 用量与费用统计（分视频）
+│       ├── media/               # 多媒体摄取与理解
+│       │   ├── url_service.py       # 视频/字幕获取（官方字幕优先，ASR 兜底）
+│       │   ├── asr_service.py       # 语音识别（本地）
+│       │   ├── asr_api_service.py   # 语音识别（API）
+│       │   ├── vision_service.py    # 截帧 + 画面理解（同步/异步分离）
+│       │   └── cache_service.py     # 帧/视频文件缓存
+│       ├── rag_pipeline/        # 检索与对话链路
+│       │   ├── rag_service.py        # RAG 问答
+│       │   ├── conversation_service.py # 多轮对话 + 上下文管理
+│       │   ├── embedding_service.py  # 向量化
+│       │   ├── vector_store.py       # FAISS 检索
+│       │   └── chunk_service.py      # 字幕切分
+│       ├── memory/              # 长期记忆存储（JSON cards 三层）
+│       │   └── memory_service.py
+│       └── trace_service.py     # 轨迹记录（append-only + 大内容落盘）
+├── extension/                   # Chrome 插件
+│   ├── content.js               # B站/YouTube 注入
 │   └── manifest.json
-├── frontend/                   # Web 前端
-│   └── static/
-├── scripts/  evaluation/  docs/  data/  CONTRIBUTING.md
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-└── .env.example
+├── frontend/static/             # Web 前端（index.html + css/ + js/）
+├── evaluation/                  # 评测集与评测脚本（独立于产品运行）
+│   ├── dataset.json             # 80 题标注集（8 个教育视频）
+│   ├── subtitles/               # 带时间戳字幕
+│   ├── judge.py                 # LLM-as-judge 统一入口（忠实度/相关性/拒答）
+│   ├── eval_*.py                # 各方案评测脚本（RAG / 全量上下文 / 固定视觉 / Agent / V5）
+│   ├── eval_cost.py             # 成本核算（按跑批窗口从 usage.db 捞账）
+│   ├── eval_logger.py           # 跑批日志（含健康检查）
+│   └── media_utils.py           # 评测用视频定位与抽帧
+├── scripts/                     # 辅助脚本
+├── docs/                        # 架构图等
+├── data/                        # 运行时数据（缓存 / usage.db / 视频状态）
+├── 项目文档/                     # 设计文档、代码审查、踩坑记录、待办
+├── Dockerfile · docker-compose.yml · requirements.txt · .env.example
 ```
 
 ## 📊 评测
@@ -167,6 +194,28 @@ framewise/
 > **检索 vs 全量注入**：同评测集上，不检索、直接注入整段字幕**胜出 10/11 项**
 > （`multi_hop` 忠实度 0.414→0.781），且因命中前缀缓存，**等效成本只有 RAG 的 35%**。
 > 详见 [evaluation/README.md](evaluation/README.md)。
+
+### 字幕+暂停帧 vs 原生多模态（V5）
+
+立项的核心假设是「**不需要把整段视频丢给多模态模型**」。同 80 题、同裁判实测：
+
+| | 字幕 + 暂停帧 | 原生整段视频 | 倍数 |
+|---|---|---|---|
+| 平均延迟 | **15.5s** | 102.7s | **6.6×** |
+| 总 input token | 352,104 | 20,734,564 | **59×** |
+| 实测费用 | **¥0.024/题** | **¥0.198/题** | **8.4×** |
+
+质量上两档互有胜负，但**方向是反的**：
+
+- 整段视频赢在**纯文本推理**（`multi_hop` 相关性 0.997 vs 0.934）——上下文完整
+- 单帧赢在**画面题**（`visual_only` 0.872 vs 0.801）——整段视频**没有「该看哪一帧」
+  的锚点**，模型得自己在 10~20 分钟里找那一刻；暂停帧直接把它放在证据上
+
+**结论：原生多模态没有更好，而我们的方案便宜一个数量级。**
+
+> ⚠️ 一个诚实的 caveat：暂停帧用的是题目标注的答案区间起点，相当于给了
+> 「答案在哪一刻」的提示。但这也是真实产品形态 —— 用户就是在他好奇的那一刻
+> 暂停提问的。**不能**把这读成「单帧的视觉理解能力更强」。
 
 详见 [evaluation/README.md](evaluation/README.md)（含已知局限与复现方式）。
 
