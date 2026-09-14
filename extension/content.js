@@ -205,7 +205,7 @@
             return;
         }
         isHistView = true;
-        fetch(API_BASE + "/api/conversations").then(function (r) { return r.json(); }).then(function (data) { var c = document.getElementById("fw-msgs"); c.innerHTML = ""; if (!data.length) { addMsg("system", "暂无历史"); return; } var h = '<div style="font-size:13px;font-weight:600;padding:0 0 8px;border-bottom:1px solid var(--fw-border);margin-bottom:8px;">📋 历史对话</div>'; data.forEach(function (cv) { h += '<div data-vid="' + esc(cv.video_id) + '" style="padding:9px 11px;border-radius:8px;background:var(--fw-surface);border:1px solid var(--fw-border);cursor:pointer;margin-bottom:6px;transition:background .18s ease;" onmouseenter="this.style.background=\'var(--fw-surface-2)\'" onmouseleave="this.style.background=\'var(--fw-surface)\'"><div style="font-size:12px;">' + esc(cv.title) + '</div><div style="font-size:10px;color:var(--fw-text-3);margin-top:2px;">' + cv.msg_count + '条 · ' + (cv.last_time || '').slice(0, 10) + '</div></div>'; }); c.innerHTML = h; c.scrollTop = 0; c.querySelectorAll("[data-vid]").forEach(function (el) { el.onclick = function () { window._fwReady = false; videoId = this.dataset.vid; fetch(API_BASE + "/api/videos/" + videoId).then(function (r) { return r.json(); }).then(function (info) { if (info.status === "ready") { window._fwReady = true; updateStatus("✅ 就绪"); document.getElementById("fw-input").disabled = false; document.getElementById("fw-send").disabled = false; loadHistory(); } else { updateStatus("⏳ 重新处理..."); initVideo(); } }); }; }); }).catch(function () { addMsg("error", "加载失败"); }); };
+        fetch(API_BASE + "/api/conversations").then(function (r) { return r.json(); }).then(function (data) { var c = document.getElementById("fw-msgs"); c.innerHTML = ""; if (!data.length) { addMsg("system", "暂无历史"); return; } var h = '<div style="font-size:13px;font-weight:600;padding:0 0 8px;border-bottom:1px solid var(--fw-border);margin-bottom:8px;">📋 历史对话</div>'; data.forEach(function (cv) { h += '<div data-vid="' + esc(cv.video_id) + '" style="padding:9px 11px;border-radius:8px;background:var(--fw-surface);border:1px solid var(--fw-border);cursor:pointer;margin-bottom:6px;transition:background .18s ease;" onmouseenter="this.style.background=\'var(--fw-surface-2)\'" onmouseleave="this.style.background=\'var(--fw-surface)\'"><div style="font-size:12px;">' + esc(cv.title) + '</div><div style="font-size:10px;color:var(--fw-text-3);margin-top:2px;">' + cv.msg_count + '条 · ' + (cv.last_time || '').slice(0, 10) + '</div></div>'; }); c.innerHTML = h; c.scrollTop = 0; c.querySelectorAll("[data-vid]").forEach(function (el) { el.onclick = function () { window._fwReady = false; _hasSub = false; videoId = this.dataset.vid; fetch(API_BASE + "/api/videos/" + videoId).then(function (r) { return r.json(); }).then(function (info) { if (info.status === "ready") { window._fwReady = true; updateStatus("✅ 就绪"); document.getElementById("fw-input").disabled = false; document.getElementById("fw-send").disabled = false; loadHistory(); } else { updateStatus("⏳ 重新处理..."); initVideo(); } }); }; }); }).catch(function () { addMsg("error", "加载失败"); }); };
     document.getElementById("fw-send").onclick = sendQuestion;
     var smartConfigured = null;  // null=未知，true/false=后端告知（面板智能模型开关用）
 
@@ -397,6 +397,11 @@
     // 若此时按 no_subtitles 渲染，用户会看到「未找到该视频的字幕，可先点击播放器中的
     // 字幕 → 中文」，而他明明刚点过（实测踩过）。所以要单独出一个中间态。
     var _uploadingSub = false;
+    // 这个视频的字幕是否已经到手（缓存里有 / 已上传 / 已就绪）。
+    // 用来决定「处理中」要不要贴「💡 点击播放器中的 字幕 → 中文」这句提示 ——
+    // 那句提示只在**确实还没有字幕**时才有意义（典型场景：没字幕、用户在跑语音识别，
+    // 提示他改成点字幕会快得多）。字幕已经在手还让人去点，只会让人以为操作没生效。
+    var _hasSub = false;
 
     chrome.runtime.sendMessage({ type: "inject-interceptor" }, function (resp) {
         console.log("[帧知] MAIN world 注入:", resp);
@@ -426,6 +431,8 @@
                 body: JSON.stringify({ subtitle_url: url, referer: referer || cleanUrl(location.href) }),
             }).then(function () {
                 _uploadingSub = false;
+                // 无条件置位（不能只靠 subtitlesState —— 若已在问答中就跳过它了）
+                _hasSub = true;
                 // ★ 这里必须主动推进界面，不能只改顶栏状态。
                 //   字幕是用户点了播放器里「字幕 → 中文」之后才拦截到的，
                 //   而此前 UI 停在 noSubtitlesState() 的「未找到字幕」面板上 ——
@@ -488,7 +495,7 @@
         }
         wasPaused = paused;
     }, 1000);
-    setInterval(function () { var cur = cleanUrl(location.href); if (cur !== lastUrl) { lastUrl = cur; if (autoMode) { videoId = null; window._fwReady = false; updateStatus("⏳ 新视频..."); document.getElementById("fw-input").disabled = true; document.getElementById("fw-send").disabled = true; document.getElementById("fw-msgs").innerHTML = ""; initVideo(); } else { addMsg("system", "🔔 检测到新视频，点击顶栏 🔄 手动处理"); } } }, 2000);
+    setInterval(function () { var cur = cleanUrl(location.href); if (cur !== lastUrl) { lastUrl = cur; if (autoMode) { videoId = null; window._fwReady = false; _hasSub = false; updateStatus("⏳ 新视频..."); document.getElementById("fw-input").disabled = true; document.getElementById("fw-send").disabled = true; document.getElementById("fw-msgs").innerHTML = ""; initVideo(); } else { addMsg("system", "🔔 检测到新视频，点击顶栏 🔄 手动处理"); } } }, 2000);
     var isOffline = false; setInterval(function () { fetch(API_BASE + "/api/health").then(function () { if (isOffline) { isOffline = false; updateStatus("✅ 已重连"); } }).catch(function () { if (!isOffline) { isOffline = true; updateStatus("⚠️ 断线"); } }); }, 10000);
 
     // ── 视频处理 ──
@@ -542,6 +549,7 @@
     }
 
     function subtitlesState() {
+        _hasSub = true;
         updateStatus("📝 字幕已缓存");
         var c = document.getElementById("fw-msgs");
         if (!c) return;
@@ -552,8 +560,8 @@
             '</div>';
     }
 
-    function readyState(data) { window._fwReady = true; updateStatus("✅ 就绪 (" + (data.chunk_count || "?") + "片段)"); document.getElementById("fw-input").disabled = false; document.getElementById("fw-send").disabled = false; document.getElementById("fw-msgs").innerHTML = '<div style="color:var(--fw-accent);text-align:center;padding:20px 0;">✅ 视频已就绪，开始提问吧！</div>'; loadHistory(); }
-    function updateProgress(data) { var pct = data.progress || 0; var text = data.progress_text || "处理中..."; updateStatus(text + " " + pct + "%"); var c = document.getElementById("fw-msgs"); if (c) { var hint = pct < 40 ? '<div style="text-align:center;font-size:11px;color:var(--fw-text-3);margin-bottom:8px;">💡 点击播放器中的 <b style="color:#00a1d6;">字幕 → 中文</b>，获取更好的体验</div>' : ''; c.innerHTML = '<div style="text-align:center;padding:20px 0;">' + hint + '<div style="font-size:13px;color:var(--fw-text-2);margin-bottom:10px;">' + text + '</div><div class="fw-progress-track"><div class="fw-progress-bar" style="width:' + pct + '%;"></div></div><div style="font-size:12px;color:var(--fw-text-3);margin-top:6px;">' + pct + '%</div></div>'; } }
+    function readyState(data) { window._fwReady = true; _hasSub = true; updateStatus("✅ 就绪 (" + (data.chunk_count || "?") + "片段)"); document.getElementById("fw-input").disabled = false; document.getElementById("fw-send").disabled = false; document.getElementById("fw-msgs").innerHTML = '<div style="color:var(--fw-accent);text-align:center;padding:20px 0;">✅ 视频已就绪，开始提问吧！</div>'; loadHistory(); }
+    function updateProgress(data) { var pct = data.progress || 0; var text = data.progress_text || "处理中..."; updateStatus(text + " " + pct + "%"); var c = document.getElementById("fw-msgs"); if (c) { var hint = (pct < 40 && !_hasSub && !_uploadingSub) ? '<div style="text-align:center;font-size:11px;color:var(--fw-text-3);margin-bottom:8px;">💡 点击播放器中的 <b style="color:#00a1d6;">字幕 → 中文</b>，获取更好的体验</div>' : ''; c.innerHTML = '<div style="text-align:center;padding:20px 0;">' + hint + '<div style="font-size:13px;color:var(--fw-text-2);margin-bottom:10px;">' + text + '</div><div class="fw-progress-track"><div class="fw-progress-bar" style="width:' + pct + '%;"></div></div><div style="font-size:12px;color:var(--fw-text-3);margin-top:6px;">' + pct + '%</div></div>'; } }
     function loadHistory() { isHistView = false; fetch(API_BASE + "/api/videos/" + videoId + "/history?limit=30").then(function (r) { return r.json(); }).then(function (data) { if (!data || !data.length) { var _m = document.getElementById("fw-msgs"); if (!_m.innerHTML.trim()) _m.innerHTML = '<div style="text-align:center;padding:30px 20px;color:var(--fw-text-2);font-size:12px;">暂无对话，开始提问吧</div>'; return; } var c = document.getElementById("fw-msgs"); c.innerHTML = ""; data.forEach(function (m) { if (m.role === "user") { addMsg("user", esc(m.content)); } else if (m.role === "assistant") { addMsg("assistant", renderMd(m.content) + renderRefs(m.references)); } }); }).catch(function () { }); }
 
     // ── 发送问题 ──
