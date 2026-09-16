@@ -672,10 +672,8 @@ async def ask_question(video_id: str, req: AskRequest):
     from backend.services.rag_pipeline.conversation_service import save_exchange
     save_exchange(video_id, req.question, result["answer"], references=result["references"])
 
-    # 提取长期记忆（后台不阻塞）
-    import asyncio
-    from backend.services.rag_pipeline.rag_service import extract_memory
-    asyncio.create_task(extract_memory(req.question, result["answer"]))
+    # 更新长期记忆（后台不阻塞；唯一入口见 _update_memory_async）
+    _update_memory_async(req.question, result["answer"], video_id, req.smart)
 
     return {
         "video_id": video_id,
@@ -747,6 +745,25 @@ def _log_memory_task_failure(task) -> None:
         logger.error(f"MemoryAgent 执行失败（本轮记忆未更新）：{type(exc).__name__}: {exc}")
 
 
+def _update_memory_async(question: str, answer: str, video_id: str, smart: bool = False) -> None:
+    """问答闭环结束后异步更新长期记忆 —— **全产品唯一的写记忆入口**。
+
+    ⚠️ 历史上还有第二条路径：`rag_service.extract_memory`（写在三个 RAG 端点里）。
+    它用另一套提示词、写 `learning/topics/current` 这个单值槽位，
+    与 MemoryAgent 的规则不一致，两边会互相覆盖同一张表 —— 已移除，
+    全部收口到这里。
+
+    先做一次零成本前置过滤：纯闲聊/纯事实问答不值得花一次 LLM 调用去得出「无需更新」。
+    """
+    if not _should_update_memory(question, video_id):
+        return
+    import asyncio
+    from backend.services.agent.memory_agent import MemoryAgent
+    _t = asyncio.create_task(
+        MemoryAgent(smart=smart).update_from_conversation(question, answer))
+    _t.add_done_callback(_log_memory_task_failure)
+
+
 @app.post("/api/videos/{video_id}/ask_agent_stream")
 async def ask_agent_stream(video_id: str, req: AskRequest):
     """Agent 流式问答：SSE 推送工具调用状态与最终答案 token"""
@@ -799,12 +816,7 @@ async def ask_agent_stream(video_id: str, req: AskRequest):
 
         # 主 agent 闭环结束后，memory agent 独立更新记忆。
         # 先做零成本前置过滤（见 _should_update_memory），避免纯闲聊也跑一趟 LLM。
-        if _should_update_memory(req.question, video_id):
-            import asyncio
-            from backend.services.agent.memory_agent import MemoryAgent
-            _t = asyncio.create_task(
-                MemoryAgent(smart=req.smart).update_from_conversation(req.question, full))
-            _t.add_done_callback(_log_memory_task_failure)
+        _update_memory_async(req.question, full, video_id, req.smart)
 
         yield f"data: {json.dumps({'done': True, 'tool_calls': final_tool_calls})}\n\n".encode()
 
@@ -863,9 +875,7 @@ async def ask_stream(video_id: str, req: AskRequest):
         # 保存对话记录
         from backend.services.rag_pipeline.conversation_service import save_exchange
         save_exchange(video_id, req.question, full, references=refs)
-        import asyncio as _aio
-        from backend.services.rag_pipeline.rag_service import extract_memory
-        _aio.create_task(extract_memory(req.question, full))
+        _update_memory_async(req.question, full, video_id, req.smart)
         yield f"data: {json.dumps({'done': True, 'references': refs})}\n\n".encode()
 
     return StreamingResponse(
@@ -1044,9 +1054,7 @@ async def ask_frame_stream(video_id: str, req: AskFrameRequest):
 
         from backend.services.rag_pipeline.conversation_service import save_exchange
         save_exchange(video_id, req.question, full, references=refs)
-        import asyncio as _aio
-        from backend.services.rag_pipeline.rag_service import extract_memory
-        _aio.create_task(extract_memory(req.question, full))
+        _update_memory_async(req.question, full, video_id, req.smart)
         yield f"data: {json.dumps({'done': True, 'references': refs, 'frame_description': description})}\n\n".encode()
 
     return StreamingResponse(

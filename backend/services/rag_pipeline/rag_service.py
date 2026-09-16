@@ -9,7 +9,7 @@ from backend.config import (
 )
 from backend.services.rag_pipeline.embedding_service import embed_single
 from backend.services.rag_pipeline.vector_store import load_index, search
-from backend.prompts import SYSTEM_PROMPT, QUIZ_PROMPT, MEMORY_EXTRACT_PROMPT
+from backend.prompts import SYSTEM_PROMPT, QUIZ_PROMPT
 
 
 def _format_time(seconds: float) -> str:
@@ -293,56 +293,6 @@ def _get_memory_context() -> str:
         return format_memories_for_prompt()
     except Exception:
         return ""
-
-
-async def extract_memory(question: str, answer: str):
-    """
-    从一轮问答中提取值得长期记住的信息（用户偏好、学习主题等）
-    调用 LLM 提取，结果存到 memory
-    """
-    from backend.services.memory.memory_service import set_card
-    from backend.services.llm.gateway import chat
-    from backend.config import LLM_MAX_TOKENS
-
-    # 对话太短不值得提取
-    if len(question) < 5 or len(answer) < 20:
-        return
-
-    prompt = f"""从下面的视频学习对话中，提取值得长期记住的用户信息。
-
-只提取以下两类，其他忽略：
-1. 用户偏好：回答风格（简洁/详细）、语言偏好、是否需要举例等
-2. 学习主题：用户正在学习什么（如 Transformer、RAG、机器学习等）
-
-如果对话中没有明显的偏好或学习主题，输出"无"。
-
-格式（每行一条，不要序号）：
-偏好：xxx
-主题：xxx
-
-用户问题：{question}
-
-AI回答：{answer[:300]}"""
-
-    try:
-        result, _ = await chat(
-            messages=[{"role": "user", "content": prompt}],
-            system_prompt=MEMORY_EXTRACT_PROMPT,
-            max_tokens=200,
-        )
-        text = result.strip()
-        if text == "无" or not text:
-            return
-
-        # 解析并存储（三层结构：类别/子类别/键）
-        for line in text.split("\n"):
-            line = line.strip()
-            if line.startswith("偏好：") and len(line) > 3:
-                set_card("preferences", "answer_style", "style", line[3:])
-            elif line.startswith("主题：") and len(line) > 3:
-                set_card("learning", "topics", "current", line[3:])
-    except Exception as e:
-        logger.debug(f"Memory extraction failed: {e}")
 
 
 async def _get_conversation_context(video_id: str) -> str:

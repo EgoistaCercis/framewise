@@ -148,6 +148,15 @@ RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))  # 检索返回的chunk数量
 # 设为 0 可关闭全量注入，产品行为退回纯 RAG。
 FULL_CONTEXT_MAX_TOKENS = int(os.getenv("FULL_CONTEXT_MAX_TOKENS", "30000"))
 
+# ── 长期记忆 ──────────────────────────────────────────
+# 注入预算（估算 token）。<memory> 块超过它就按类别优先级截断：
+# preferences（偏好）> user_profile（画像）> learning（主题）。
+# 按**类别**而不是按强度统一排 —— 否则一张反复写过的长视频摘要卡
+# 会把一条短的真偏好挤出去。
+MEMORY_PROMPT_BUDGET_TOKENS = int(os.getenv("MEMORY_PROMPT_BUDGET_TOKENS", "400"))
+# C 类（学习主题）多久没再出现就归档。A/B 类无 TTL（用户明确说过的话长期有效）。
+MEMORY_TTL_DAYS = int(os.getenv("MEMORY_TTL_DAYS", "30"))
+
 # 上下文压缩配置（四层策略）
 CONTEXT_MAX_MESSAGES = int(os.getenv("CONTEXT_MAX_MESSAGES", "50"))       # 第1层：最大消息数
 CONTEXT_MAX_TOKENS = int(os.getenv("CONTEXT_MAX_TOKENS", "80000"))       # 80% 窗口

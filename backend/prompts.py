@@ -48,7 +48,9 @@ Q3: （可选，考察应用能力的题目）
 
 SUMMARY_PROMPT = "你是对话摘要助手，只输出简洁的中文摘要。"
 
-MEMORY_EXTRACT_PROMPT = "你是记忆提取助手，只输出用户偏好和学习主题，没有则输出'无'。"
+# 注：原来的 MEMORY_EXTRACT_PROMPT 已随 rag_service.extract_memory 一并移除。
+# 那是历史遗留的**第二条写记忆路径**：用另一套规则、写 learning/topics/current 单值槽位，
+# 与 MemoryAgent 写同一张表却互不知情。现在全产品只有 MemoryAgent 一个写入方。
 
 
 # 画面分析提示词。

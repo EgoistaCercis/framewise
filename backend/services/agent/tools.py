@@ -389,23 +389,48 @@ class DeleteFileTool(Tool):
 class SaveMemoryTool(Tool):
     """保存一条长期记忆（三层结构）"""
     name = "save_memory"
-    description = "当需要保存或更新用户的偏好、学习主题等长期记忆时调用。记忆按「类别→子类别→键值对」三层结构组织。"
+    description = (
+        "保存或强化一条长期记忆。记忆按「类别→子类别→键值对」三层结构组织。\n"
+        "**同 key 同值**会被视为「再次确认」并累加强度，**不会报错，直接调用即可**；\n"
+        "**同 key 但值不同**默认会被拒绝（视为冲突），"
+        "只有用户在对话里**明确改口**时才把 overwrite 置 true 并说明 reason。"
+    )
     parameters = {
         "type": "object",
         "properties": {
             "category": {"type": "string", "description": "类别，如 user_profile、preferences、learning"},
             "subcategory": {"type": "string", "description": "子类别，如 identity、answer_style、topics"},
-            "key": {"type": "string", "description": "键，如 role、style、current"},
-            "value": {"type": "string", "description": "值，即具体记忆内容"},
+            "key": {"type": "string", "description": "键，如 role、style；学习主题用主题名本身（如 hitl）"},
+            "value": {"type": "string", "description": "值，即具体记忆内容。已有键请**逐字复用**原值，不要换同义词"},
+            "overwrite": {"type": "boolean",
+                          "description": "仅当用户本轮**明确改口**、要覆盖已有键的旧值时置 true；默认 false"},
+            "reason": {"type": "string",
+                       "description": "覆盖或新建键的依据（一句话）。新建 key 时必填"},
         },
         "required": ["category", "subcategory", "key", "value"],
     }
 
     async def run(self, context: dict, category: str = "", subcategory: str = "",
-                  key: str = "", value: str = "", **kwargs) -> str:
-        from backend.services.memory.memory_service import set_card
-        set_card(category, subcategory, key, value)
-        return f"已保存记忆：{category}/{subcategory}/{key} = {value}"
+                  key: str = "", value: str = "", overwrite: bool = False,
+                  reason: str = "", **kwargs) -> str:
+        from backend.services.memory.memory_service import save_card
+        r = save_card(category, subcategory, key, value,
+                      overwrite=overwrite, reason=reason)
+        path = f"{category}/{subcategory}/{key}"
+        act = r["action"]
+        if act == "new":
+            return f"已新建记忆：{path} = {value}"
+        if act == "reinforced":
+            return f"已强化已有记忆：{path}（值未变，强度 +1）"
+        if act == "restored":
+            return f"已恢复此前归档的记忆：{path} = {value}"
+        if act == "replaced":
+            return f"已覆盖记忆：{path}（旧值「{r['old_value']}」→ 新值「{value}」）"
+        if act == "conflict":
+            # 必须说清楚"没写进去"，否则模型会以为自己存成功了
+            return (f"未写入：{path} 已存在不同的值「{r['old_value']}」。"
+                    f"若用户确实改口，请带 overwrite=true 与 reason 重新调用；否则保持原值。")
+        return f"未写入：{r.get('reason', '参数不合法')}"
 
 
 class RecallMemoryTool(Tool):
