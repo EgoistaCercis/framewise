@@ -696,6 +696,57 @@ async def ask_question(video_id: str, req: AskRequest):
 # 需要非流式结果请用 Agent.run（它走的就是产品那条流式循环）。
 
 
+# ── 记忆沉淀的前置过滤 ───────────────────────────────
+#
+# 原来每轮问答结束都无条件起一个 MemoryAgent（最多 4 轮迭代的 LLM 调用），
+# 哪怕纯闲聊也要跑一趟才得出「无需更新」—— 实测「几乎每轮都落卡」，
+# 既烧钱又往记忆里灌噪声（详见项目文档/项目改进/记忆系统改造方案）。
+#
+# 两个过滤器**叠加**，不是二选一：
+#   ① 关键词命中 → 立刻沉淀（覆盖绝大多数显式偏好表达）
+#   ② 否则每 N 轮兜底跑一次（捞白名单漏掉的，如"我比较喜欢…"这类无触发词的表达）
+_MEMORY_HINT_WORDS = (
+    "以后", "别再", "不要", "不用", "我喜欢", "我不喜欢", "我是", "我学", "我在学",
+    "换个说法", "简洁", "详细", "举例", "记住", "下次", "偏好", "习惯", "风格",
+    "初学者", "专业", "工作", "中文", "英文", "解释一下", "讲深",
+)
+MEMORY_BATCH_ROUNDS = 5          # 兜底间隔：每 N 轮至少沉淀一次
+_MEMORY_ROUNDS: dict = {}        # video_id -> 距上次沉淀的轮数
+
+
+def _should_update_memory(question: str, video_id: str) -> bool:
+    """是否需要为本轮问答启动 MemoryAgent。
+
+    注意这是**前置过滤**，不是判断"该不该记"—— 那个判断仍然归 MemoryAgent。
+    这里只负责挡掉明显不值得花一次 LLM 调用的轮次。
+    """
+    q = (question or "").strip()
+    if not q:
+        return False
+    if any(w in q for w in _MEMORY_HINT_WORDS):
+        _MEMORY_ROUNDS[video_id] = 0
+        return True
+    n = _MEMORY_ROUNDS.get(video_id, 0) + 1
+    if n >= MEMORY_BATCH_ROUNDS:
+        _MEMORY_ROUNDS[video_id] = 0
+        return True
+    _MEMORY_ROUNDS[video_id] = n
+    return False
+
+
+def _log_memory_task_failure(task) -> None:
+    """MemoryAgent 是 fire-and-forget 的 —— 挂了必须能看见。
+
+    原来 create_task 没挂回调，异常被 asyncio 静默吞掉：
+    记忆写不进去，而日志里一点痕迹都没有，坏了永远不知道。
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(f"MemoryAgent 执行失败（本轮记忆未更新）：{type(exc).__name__}: {exc}")
+
+
 @app.post("/api/videos/{video_id}/ask_agent_stream")
 async def ask_agent_stream(video_id: str, req: AskRequest):
     """Agent 流式问答：SSE 推送工具调用状态与最终答案 token"""
@@ -746,10 +797,14 @@ async def ask_agent_stream(video_id: str, req: AskRequest):
         from backend.services.rag_pipeline.conversation_service import save_exchange
         save_exchange(video_id, req.question, full)
 
-        # 主 agent 闭环结束后，memory agent 独立更新记忆
-        import asyncio
-        from backend.services.agent.memory_agent import MemoryAgent
-        asyncio.create_task(MemoryAgent(smart=req.smart).update_from_conversation(req.question, full))
+        # 主 agent 闭环结束后，memory agent 独立更新记忆。
+        # 先做零成本前置过滤（见 _should_update_memory），避免纯闲聊也跑一趟 LLM。
+        if _should_update_memory(req.question, video_id):
+            import asyncio
+            from backend.services.agent.memory_agent import MemoryAgent
+            _t = asyncio.create_task(
+                MemoryAgent(smart=req.smart).update_from_conversation(req.question, full))
+            _t.add_done_callback(_log_memory_task_failure)
 
         yield f"data: {json.dumps({'done': True, 'tool_calls': final_tool_calls})}\n\n".encode()
 
