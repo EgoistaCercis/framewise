@@ -33,6 +33,20 @@ LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-v4-pro")
 # 推理模型需要更大 max_tokens（reasoning + 回答）
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "8192"))
 
+# ── 上下文预算 ────────────────────────────────────────
+# 模型窗口。**这是外部事实，必须记录依据** ——
+# 原来的 CONTEXT_MAX_TOKENS 注释写「80% 窗口」却没说窗口是多大，无从核对。
+# 依据：DeepSeek 官方 API 文档，deepseek-chat 系列上下文为 128K
+#      （https://api-docs.deepseek.com/ ，2026-09 核对）。
+# 换模型时必须同步改这个值 —— 它现在也是各处预算的推导依据。
+MODEL_CONTEXT_WINDOW_TOKENS = int(os.getenv("MODEL_CONTEXT_WINDOW_TOKENS", "128000"))
+
+# 单次请求**输入**的策略上限。
+# 取窗口的一半，而不是贴着窗口跑：要给输出(LLM_MAX_TOKENS)和上下文突发留余量，
+# 也让"临时换一个 64K 窗口的模型"仍然安全。
+# ★ 各处预算（字幕/历史/记忆/工具预留）之和不得越过它，文件末尾有启动自检。
+INPUT_BUDGET_TOKENS = int(os.getenv("INPUT_BUDGET_TOKENS", "64000"))
+
 # 单次模型调用的整体超时（秒）。
 # 注意这是个**整体**超时，不是只连不上的超时：推理模型生成上万 token 很容易吃满。
 # 配合网关的重试（超时可重试），最坏情况是一道题重头生成 3 次。
@@ -138,13 +152,13 @@ RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))  # 检索返回的chunk数量
 # 依据是评测结论：全量注入对 RAG 质量 12 项胜 9 / 负 1 / 平 2，
 # 且整段字幕是稳定前缀、命中缓存后**等效成本只有 RAG 的 35%**。
 #
-# ★ 必须显著小于 CONTEXT_MAX_TOKENS(80000)：那个数只统计 DB 里的历史对话
-#   （见 conversation_service 的四层压缩），**算不到注入的字幕** ——
-#   留不出余量就只能等厂商 API 报上下文超限。
+# ★ 它和各处预算**共享** INPUT_BUDGET_TOKENS，不是各自独立的数字 ——
+#   文件末尾有自检，保证"字幕 + 历史 + 记忆 + 工具预留"之和不超过它。
+#   原来这些数互不知情，谁也不知道加起来是多少。
 #
 # 30000 是实测标定的：评测集 8 个视频字幕在 2,482~5,750 token（中位 4,090），
 # 对最大的一条有 5.2× 余量；覆盖到约 1.5 小时的讲座；
-# 3 小时课程（≈54,000）会被正确挡住，退回 RAG。占预算的 37.5%。
+# 3 小时课程（≈54,000）会被正确挡住，退回 RAG。
 # 设为 0 可关闭全量注入，产品行为退回纯 RAG。
 FULL_CONTEXT_MAX_TOKENS = int(os.getenv("FULL_CONTEXT_MAX_TOKENS", "30000"))
 
@@ -162,9 +176,61 @@ MEMORY_BATCH_ROUNDS = int(os.getenv("MEMORY_BATCH_ROUNDS", "5"))
 
 # 上下文压缩配置（四层策略）
 CONTEXT_MAX_MESSAGES = int(os.getenv("CONTEXT_MAX_MESSAGES", "50"))       # 第1层：最大消息数
-CONTEXT_MAX_TOKENS = int(os.getenv("CONTEXT_MAX_TOKENS", "80000"))       # 80% 窗口
+# 历史对话的**摘要触发阈值**。超过它就把最旧的部分交给 LLM 摘要。
+#
+# 这个数是**从输入预算推出来的**，不是拍脑袋：
+#   INPUT_BUDGET_TOKENS   64,000
+#   − 字幕注入            30,000
+#   − 记忆/系统/工具预留   7,500
+#   = 历史上限            26,500  → 取 20,000 留余量
+#
+# ★ 同时必须**低于「条数上限能产出的最坏值」**，否则这套摘要机制永远不会触发。
+#   实测（user/assistant 交替，50 条里约 25 条是回答）：
+#     50 条 × 中位 489 字符 ≈  8,650 token  → 不触发
+#     50 条 × P90 1021     ≈ 17,500 token  → 不触发
+#     50 条 × 最长 1945    ≈ 32,900 token  → **触发**
+#   **原值 80000 在 32,900 之上** —— 于是摘要 + 梯度再摘要 + 应急截断三层
+#   从来没跑过一次，是一整套"看起来在工作"的死代码。
+CONTEXT_MAX_TOKENS = int(os.getenv("CONTEXT_MAX_TOKENS", "20000"))
 TOOL_TRIM_LENGTH = int(os.getenv("TOOL_TRIM_LENGTH", "500"))             # 第2层：工具输出裁剪
 SUMMARY_TARGET_LENGTH = int(os.getenv("SUMMARY_TARGET_LENGTH", "200"))    # 第3层：摘要目标
+
+
+# ═══════════════════════════════════════════
+# 上下文预算自检（启动时一次）
+# ═══════════════════════════════════════════
+#
+# 各处预算（字幕 / 历史 / 记忆 / 工具预留）是**各自独立**定出来的，
+# 原来没有任何地方核算它们的**和** —— 谁也不知道加起来会不会超过模型窗口。
+#
+# 这里只做**只读检查**：不改任何行为，只在超了的时候发出警告。
+# 目的是让"谁把某个阈值调大了"立刻可见，而不是等厂商 API 报上下文超限。
+def _check_context_budget() -> str:
+    """返回警告文本；预算之和在范围内则返回空串。"""
+    parts = {
+        "字幕注入": FULL_CONTEXT_MAX_TOKENS,
+        "历史摘要阈值": CONTEXT_MAX_TOKENS,
+        "记忆注入": MEMORY_PROMPT_BUDGET_TOKENS,
+        "系统提示(估)": 1000,
+        "工具结果预留(估)": 6000,      # 8 轮 × 2 次工具 × ~330 token
+        "播放位置+提问(估)": 100,
+    }
+    total = sum(parts.values())
+    if total <= INPUT_BUDGET_TOKENS:
+        return ""
+    detail = "、".join(f"{k} {v:,}" for k, v in parts.items())
+    return (f"各处上下文预算之和 {total:,} 超过输入预算 {INPUT_BUDGET_TOKENS:,}"
+            f"（模型窗口 {MODEL_CONTEXT_WINDOW_TOKENS:,} 的一半）。"
+            f"明细：{detail}。请调小其中之一。")
+
+
+_context_budget_warning = _check_context_budget()
+if _context_budget_warning:
+    # 不在导入期抛异常：服务要能起来，但必须让人看见
+    import sys as _sys
+    print("", file=_sys.stderr)
+    print(f"[config][警告] {_context_budget_warning}", file=_sys.stderr)
+    print("", file=_sys.stderr)
 
 # ═══════════════════════════════════════════
 # Loguru 日志配置
