@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>帧知 FrameWise — B站视频学习 AI 助手</title>
+<meta name="description" content="看B站视频遇到不懂的地方，点一下悬浮按钮就能提问。AI 结合字幕与画面，给出带时间戳、可跳转的回答，不打断学习流。开源免费。">
+<style>
+  :root {
+    --bg: #FAF8F5;
+    --bg-card: #FFFFFF;
+    --ink: #1F2937;
+    --ink-soft: #4B5563;
+    --ink-mute: #8B95A1;
+    --line: #E7E2DA;
+    --accent: #2F6FED;
+    --accent-soft: #EAF0FE;
+    --warm: #B45309;
+    --warm-soft: #FEF3E2;
+    --green: #047857;
+    --green-soft: #E6F4EF;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.65;
+    font-size: 16px;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+  /* ── 导航 ── */
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    background: rgba(250,248,245,.92); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+  }
+  nav .wrap { display: flex; align-items: center; justify-content: space-between; height: 56px; }
+  .logo { font-weight: 700; font-size: 17px; color: var(--ink); }
+  .logo span { color: var(--accent); }
+  nav .links { display: flex; gap: 20px; align-items: center; font-size: 14px; }
+  nav .links a { color: var(--ink-soft); }
+  nav .links a:hover { color: var(--accent); }
+  .btn-gh {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--line); border-radius: 8px; padding: 5px 12px;
+    background: var(--bg-card); color: var(--ink); font-weight: 600;
+  }
+  .btn-gh:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── Hero ── */
+  .hero { text-align: center; padding: 72px 0 48px; }
+  .hero h1 { font-size: 40px; line-height: 1.3; letter-spacing: .5px; }
+  .hero h1 em { font-style: normal; color: var(--accent); }
+  .hero p.lead {
+    max-width: 620px; margin: 18px auto 0;
+    font-size: 17px; color: var(--ink-soft);
+  }
+  .hero p.lead b { color: var(--ink); }
+  .badges { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 22px; }
+  .badge {
+    font-size: 12.5px; padding: 4px 12px; border-radius: 999px;
+    background: var(--bg-card); border: 1px solid var(--line); color: var(--ink-soft);
+  }
+  .cta { margin-top: 30px; display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-block; padding: 11px 26px; border-radius: 10px;
+    font-size: 15.5px; font-weight: 600; transition: transform .12s ease;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: #245FD2; color: #fff; }
+  .btn-ghost { background: var(--bg-card); color: var(--ink); border: 1px solid var(--line); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── 区块通用 ── */
+  section { padding: 52px 0; }
+  .sec-title { text-align: center; font-size: 26px; margin-bottom: 8px; }
+  .sec-sub { text-align: center; color: var(--ink-mute); font-size: 14.5px; margin-bottom: 36px; }
+
+  /* ── 演示占位 ── */
+  .shots { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .shot {
+    border: 2px dashed var(--line); border-radius: 14px;
+    background: var(--bg-card); min-height: 280px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    color: var(--ink-mute); font-size: 14px; text-align: center; padding: 24px;
+  }
+  .shot .cap { margin-top: 10px; color: var(--ink-soft); font-weight: 600; }
+  @media (max-width: 720px) { .shots { grid-template-columns: 1fr; } }
+
+  /* ── 能力卡片 ── */
+  .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .card {
+    background: var(--bg-card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 22px 18px;
+  }
+  .card .ico { font-size: 26px; }
+  .card h3 { font-size: 15.5px; margin: 10px 0 6px; }
+  .card p { font-size: 13.5px; color: var(--ink-soft); }
+  @media (max-width: 860px) { .cards { grid-template-columns: 1fr 1fr; } }
+  @media (max-width: 520px) { .cards { grid-template-columns: 1fr; } }
+
+  /* ── 数字区 ── */
+  .stats {
+    background: #211E1B; color: #F3EFE9; border-radius: 18px;
+    padding: 46px 40px;
+  }
+  .stats h2 { text-align: center; font-size: 25px; color: #fff; }
+  .stats .sec-sub { color: #B9B2A7; }
+  .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-top: 30px; }
+  .stat { text-align: center; }
+  .stat .num { font-size: 38px; font-weight: 800; color: #FFC24B; letter-spacing: .5px; }
+  .stat .lbl { font-size: 13.5px; margin-top: 4px; color: #D8D2C8; }
+  .stat-note {
+    margin-top: 26px; font-size: 13px; color: #B9B2A7; text-align: center; line-height: 1.8;
+  }
+  .stat-note b { color: #F3EFE9; }
+  @media (max-width: 720px) { .stat-grid { grid-template-columns: 1fr 1fr; } }
+
+  .insight {
+    margin-top: 26px; background: rgba(255,255,255,.06);
+    border: 1px solid rgba(255,255,255,.12); border-radius: 12px; padding: 18px 22px;
+    font-size: 14.5px; color: #E5DFD5;
+  }
+  .insight b { color: #FFC24B; }
+
+  /* ── 上手步骤 ── */
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; counter-reset: step; }
+  .step {
+    background: var(--bg-card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 24px 20px; position: relative;
+  }
+  .step::before {
+    counter-increment: step; content: counter(step);
+    position: absolute; top: -13px; left: 20px;
+    width: 26px; height: 26px; border-radius: 50%;
+    background: var(--accent); color: #fff; font-size: 14px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step h3 { font-size: 15.5px; margin: 6px 0 8px; }
+  .step p { font-size: 13.5px; color: var(--ink-soft); }
+  .step code {
+    display: block; margin-top: 10px; padding: 9px 12px;
+    background: #211E1B; color: #E8E2D8; border-radius: 8px;
+    font-family: "SF Mono", Consolas, Menlo, monospace; font-size: 12.5px;
+    user-select: all;
+  }
+  @media (max-width: 720px) { .steps { grid-template-columns: 1fr; } }
+
+  .note {
+    margin-top: 18px; font-size: 13px; color: var(--ink-soft);
+    background: var(--warm-soft); border: 1px solid #F3E0C0; border-radius: 10px;
+    padding: 12px 16px;
+  }
+  .note b { color: var(--warm); }
+
+  /* ── FAQ ── */
+  .faq { max-width: 720px; margin: 0 auto; }
+  .faq details {
+    background: var(--bg-card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px 20px; margin-bottom: 12px;
+  }
+  .faq summary { font-weight: 600; cursor: pointer; font-size: 15px; }
+  .faq details p { margin-top: 10px; font-size: 14px; color: var(--ink-soft); }
+  .faq details code {
+    background: var(--accent-soft); color: var(--accent); border-radius: 5px;
+    padding: 1px 7px; font-size: 12.5px;
+  }
+
+  /* ── 底部 ── */
+  footer { border-top: 1px solid var(--line); padding: 34px 0 44px; text-align: center; }
+  footer .gh {
+    display: inline-block; background: var(--ink); color: #fff;
+    padding: 12px 30px; border-radius: 10px; font-weight: 600; font-size: 15px;
+  }
+  footer .gh:hover { background: #000; color: #fff; }
+  footer .meta { margin-top: 18px; font-size: 12.5px; color: var(--ink-mute); }
+  footer .meta a { color: var(--ink-soft); }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <div class="logo">帧知 <span>FrameWise</span></div>
+    <div class="links">
+      <a href="#features">功能</a>
+      <a href="#why">为什么快</a>
+      <a href="#start">上手</a>
+      <a href="#faq">FAQ</a>
+      <a class="btn-gh" href="https://github.com/EgoistaCercis/framewise" target="_blank">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <h1>看B站视频遇到不懂的，<br>点一下，<em>问到点为止</em></h1>
+    <p class="lead">
+      帧知是一个B站视频学习 AI 助手（浏览器插件）。视频页点悬浮按钮即可对当前视频提问，
+      AI 结合<b>字幕与画面</b>给出带<b>时间戳引用、可点击跳转</b>的回答——不打断学习流。
+    </p>
+    <div class="badges">
+      <span class="badge">开源免费</span>
+      <span class="badge">回答可溯源到秒</span>
+      <span class="badge">按需看画面，不为 token 交学费</span>
+      <span class="badge">评测数据全部可复现</span>
+    </div>
+    <div class="cta">
+      <a class="btn btn-primary" href="#start">三步开始使用</a>
+      <a class="btn btn-ghost" href="https://github.com/EgoistaCercis/framewise" target="_blank">查看源码 →</a>
+    </div>
+  </div>
+</header>
+
+<section id="shots">
+  <div class="wrap">
+    <div class="shots">
+      <div class="shot">
+        <div style="font-size:34px">🖼️</div>
+        <div>截图占位：视频页悬浮按钮 + 提问入口</div>
+        <div class="cap">（发布前替换为真实截图，建议 720×420）</div>
+      </div>
+      <div class="shot">
+        <img src="app_ui.png" alt="帧知对话界面：带时间戳引用的回答" style="width:100%; border-radius:10px;">
+        <div class="cap">产品界面：AI 回答带时间戳引用，点击跳转对应画面</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features" style="padding-top: 20px;">
+  <div class="wrap">
+    <h2 class="sec-title">它做了什么</h2>
+    <p class="sec-sub">不是又一个聊天框——每一项能力都为"看视频学习"这个场景定制</p>
+    <div class="cards">
+      <div class="card">
+        <div class="ico">⏱️</div>
+        <h3>回答可跳转到秒</h3>
+        <p>回答里的时间戳引用可以直接点击跳到对应画面，不用来回拖进度条找"讲到这里了"。</p>
+      </div>
+      <div class="card">
+        <div class="ico">🎬</div>
+        <h3>自动理解视频</h3>
+        <p>打开视频页即自动提取字幕、向量化建索引，无需任何手动准备，问就完了。</p>
+      </div>
+      <div class="card">
+        <div class="ico">👁️</div>
+        <h3>按需看画面</h3>
+        <p>问到"幻灯片上写了什么"这类画面问题时，AI 自动分析你暂停处的那一帧，其余时刻不浪费。</p>
+      </div>
+      <div class="card">
+        <div class="ico">🧠</div>
+        <h3>记住你的偏好</h3>
+        <p>说过"回答简洁点"，之后就一直简洁。结构化长期记忆，跨会话生效。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="why">
+  <div class="wrap">
+    <div class="stats">
+      <h2>为什么它又快又省</h2>
+      <p class="sec-sub">技术路线不是拍脑袋定的——每一项都由自建评测集的实测数据驱动</p>
+      <div class="stat-grid">
+        <div class="stat">
+          <div class="num">8.4×</div>
+          <div class="lbl">比"整段视频丢给多模态"便宜</div>
+        </div>
+        <div class="stat">
+          <div class="num">6.6×</div>
+          <div class="lbl">比"整段视频丢给多模态"快</div>
+        </div>
+        <div class="stat">
+          <div class="num">35%</div>
+          <div class="lbl">全量字幕（vs RAG）的等效成本</div>
+        </div>
+        <div class="stat">
+          <div class="num">100%</div>
+          <div class="lbl">无依据问题拒答率，不编造</div>
+        </div>
+      </div>
+      <div class="insight">
+        一个反直觉的发现：把<b>整段视频</b>直接丢给多模态模型，画面类问题<b>反而更差</b>
+        （相关性 0.801 vs 0.872）——模型要在十几分钟里自己找"该看哪一帧"，
+        而帧知直接把你<b>暂停的那一帧</b>放到它眼前。
+        轻量路线不是妥协，是更优解。
+      </div>
+      <p class="stat-note">
+        数据口径：8 个教育视频 / 80 道题 / 5 类问题的开源评测集，同题同裁判横向对比。<br>
+        评测脚本与原始结果全部随项目开源，<b>欢迎复现和质疑</b>。
+      </p>
+    </div>
+  </div>
+</section>
+
+<section id="start">
+  <div class="wrap">
+    <h2 class="sec-title">三步上手</h2>
+    <p class="sec-sub">会复制粘贴命令就行</p>
+    <div class="steps">
+      <div class="step">
+        <h3>起一个后端</h3>
+        <p>克隆仓库，配好模型 API Key（DeepSeek / 通义百炼等），一条命令起服务：</p>
+        <code>docker-compose up -d</code>
+      </div>
+      <div class="step">
+        <h3>装浏览器插件</h3>
+        <p>下载仓库里的 <b>extension</b> 目录 → Chrome 打开 <b>chrome://extensions</b> →
+        开启开发者模式 → 「加载已解压的扩展程序」。</p>
+      </div>
+      <div class="step">
+        <h3>打开B站视频提问</h3>
+        <p>插件设置里填后端地址（本地默认 <b>http://localhost:8123</b>），
+        随便打开一个B站学习视频，点悬浮按钮开问。</p>
+      </div>
+    </div>
+    <div class="note">
+      <b>没有服务器？</b>后端也可以部署在任意一台你能访问的机器上（1核1G 的最低配云主机即可，
+      模型调用走你自己的 API Key，服务器只负责调度）。部署方式见仓库 README。
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <h2 class="sec-title">常见问题</h2>
+    <p class="sec-sub">—</p>
+    <div class="faq">
+      <details>
+        <summary>要花多少钱？</summary>
+        <p>项目本身开源免费。运行时花费的是模型 API 调用费（你自己的 Key），
+        每次提问的字幕+单帧分析成本约 ¥0.02 量级——因为设计上就用廉价的文本 token 覆盖大部分问题，
+        只在真需要看画面时才付视觉成本。</p>
+      </details>
+      <details>
+        <summary>我的数据在哪？</summary>
+        <p>全部在你自己部署的后端里：字幕、索引、对话记录、笔记、长期记忆都存在本地 SQLite 和文件系统，
+        不经过任何第三方中转。模型调用也只是把提问相关内容发给你的模型服务商。</p>
+      </details>
+      <details>
+        <summary>支持哪些视频？</summary>
+        <p>支持B站视频（自动获取字幕，无字幕视频可开启语音转写），也可以直接粘贴视频链接（B站/YouTube 等）解析。
+        更多平台在计划中，欢迎提 issue。</p>
+      </details>
+      <details>
+        <summary>它会不会一本正经地胡说？</summary>
+        <p>评测集里 16 道"视频里根本没有答案"的陷阱题，拒答率 100%——回答尽量只基于视频实际内容，
+        查不到依据就说没有。当然，AI 不可能完美，时间戳引用能帮你快速核实。</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <a class="gh" href="https://github.com/EgoistaCercis/framewise" target="_blank">
+      在 GitHub 上查看 → EgoistaCercis/framewise
+    </a>
+    <div class="meta">
+      帧知 FrameWise · 开源视频学习助手 ｜
+      <a href="https://github.com/EgoistaCercis/framewise/tree/main/evaluation" target="_blank">评测集与复现脚本</a> ｜
+      <a href="https://github.com/EgoistaCercis/framewise/blob/main/README.md" target="_blank">文档</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
