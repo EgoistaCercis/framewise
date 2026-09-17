@@ -9,9 +9,8 @@ from loguru import logger
 
 from backend.config import (
     DATA_DIR, CONTEXT_MAX_MESSAGES, CONTEXT_MAX_TOKENS,
-    TOOL_TRIM_LENGTH, SUMMARY_TARGET_LENGTH,
+    TOOL_TRIM_LENGTH,
 )
-from backend.prompts import SUMMARY_PROMPT
 
 DB_PATH = os.path.join(DATA_DIR, "framewise.db")
 
@@ -176,6 +175,10 @@ async def get_recent_context(video_id: str) -> str:
     if not video_id:
         return ""
 
+    # 压缩的**执行**交给 CompressAgent（本函数只决定"什么时候压、压哪段"）
+    from backend.services.agent.compress_agent import CompressAgent
+    _compressor = CompressAgent()
+
     # 加载所有消息
     all_msgs = _load_all_messages(video_id)
     if not all_msgs:
@@ -195,7 +198,7 @@ async def get_recent_context(video_id: str) -> str:
     if tokens > CONTEXT_MAX_TOKENS:
         logger.info(f"[{video_id}] Context {tokens} tokens exceeds {CONTEXT_MAX_TOKENS}, summarizing...")
         try:
-            summary = await _llm_summarize(all_msgs)
+            summary = await _compressor.summarize_history(all_msgs)
             if summary:
                 # 用摘要替换最旧的 60% 消息
                 cut = int(len(all_msgs) * 0.6)
@@ -218,7 +221,7 @@ async def get_recent_context(video_id: str) -> str:
             older = all_msgs[:cut]
             newer = all_msgs[cut:]
             try:
-                summary = await _llm_summarize(older)
+                summary = await _compressor.summarize_history(older)
                 if summary:
                     newer.insert(0, {"role": "system", "content": summary, "content_type": "summary"})
                 all_msgs = newer
@@ -241,27 +244,3 @@ async def get_recent_context(video_id: str) -> str:
 
     return "\n".join(lines) + "\n"
 
-
-async def _llm_summarize(msgs: list[dict]) -> str:
-    """用 LLM 生成对话摘要"""
-    from backend.services.llm.gateway import chat
-
-    text = "\n".join(
-        f"{'用户' if m['role'] == 'user' else 'AI'}: {m['content'][:200]}"
-        for m in msgs
-    )
-    prompt = f"""以下是视频学习对话的片段，请用 {SUMMARY_TARGET_LENGTH} 字以内的中文简洁概括用户问了什么、AI 回答了什么。
-只输出摘要文本，不要额外解释。
-
-{text}"""
-
-    answer, _ = await chat(
-        messages=[{"role": "user", "content": prompt}],
-        system_prompt=SUMMARY_PROMPT,
-        max_tokens=300,
-    )
-    return answer.strip()
-
-
-# 启动时初始化
-init()
