@@ -156,6 +156,9 @@ FULL_CONTEXT_MAX_TOKENS = int(os.getenv("FULL_CONTEXT_MAX_TOKENS", "30000"))
 MEMORY_PROMPT_BUDGET_TOKENS = int(os.getenv("MEMORY_PROMPT_BUDGET_TOKENS", "400"))
 # C 类（学习主题）多久没再出现就归档。A/B 类无 TTL（用户明确说过的话长期有效）。
 MEMORY_TTL_DAYS = int(os.getenv("MEMORY_TTL_DAYS", "30"))
+# 攒批兜底的间隔轮数：关键词白名单没命中时，每 N 轮至少跑一次记忆提取。
+# 白名单会漏掉"我比较喜欢…"这类没有触发词的表达，所以要有个兜底周期。
+MEMORY_BATCH_ROUNDS = int(os.getenv("MEMORY_BATCH_ROUNDS", "5"))
 
 # 上下文压缩配置（四层策略）
 CONTEXT_MAX_MESSAGES = int(os.getenv("CONTEXT_MAX_MESSAGES", "50"))       # 第1层：最大消息数
