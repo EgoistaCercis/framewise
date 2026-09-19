@@ -38,6 +38,11 @@ async def startup_event():
     logger.info(f"   Embedding模型: {SILICONFLOW_EMBEDDING_MODEL}")
     logger.info(f"   ASR模式: {ASR_MODE}")
 
+    # 鉴权自检：对外监听却没配密钥时，在**启动日志**里就警告
+    # （真正的拦截在 auth_guard 中间件里，这里只是让它早点可见）
+    from backend.services import auth
+    auth.startup_check()
+
     # 恢复启动时中断的"处理中"状态 → 标记为 error
     import asyncio
     recovered = 0
@@ -63,6 +68,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 访问鉴权中间件（共享密钥，见 services/auth.py）
+#
+# ★ 用**中间件**而不是逐端点加 Depends：保证以后新增的端点默认受保护。
+#   依赖是"每个端点都要记得加"，而人会忘 —— 漏掉的那一个就是后门。
+#   注册在访问日志中间件**之后** → 它在最外层，先于日志执行；
+#   所以被它拦下的请求不会进访问日志，`auth._reject` 里单独记了一笔。
+@app.middleware("http")
+async def auth_guard(request, call_next):
+    from backend.services import auth
+    denied = await auth.require_key(request)
+    if denied is not None:
+        return denied
+    return await call_next(request)
+
 
 # 请求日志中间件（含 request_id 追踪）
 @app.middleware("http")

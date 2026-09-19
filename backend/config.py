@@ -128,6 +128,13 @@ DASHSCOPE_VL_MODEL = VISION_MODEL
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "8123"))
 
+# 访问密钥（详见 services/auth.py）。
+# 留空时：只监听本机 → 放行；监听 0.0.0.0 等对外地址 → **拒绝所有 /api 请求**。
+# 也就是说「想对外提供服务，就必须设一个」—— 避免忘了配就裸奔在公网上，
+# 被扫到的人拿去调 /api/videos/from_url 烧你的 LLM 额度。
+# 生成：python -c "import secrets; print(secrets.token_urlsafe(24))"
+API_AUTH_KEY = os.getenv("API_AUTH_KEY", "")
+
 # ASR 模式: "local" = faster-whisper, "api" = 硅基流动 SenseVoice
 ASR_MODE = os.getenv("ASR_MODE", "api")
 
