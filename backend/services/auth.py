@@ -22,6 +22,23 @@
 
 3. **用 `hmac.compare_digest` 而不是 `==`**：前者是常数时间比较，防时序攻击。
    （密钥短、且攻击者需要先知道长度，实际风险不高，但这行代码不贵。）
+
+## ⚠️ 改动这里时最容易踩的坑：CORS 预检
+
+加了 `X-API-Key` 之后，浏览器对跨域请求会**先发一个 OPTIONS 预检**，
+而按规范**预检不携带自定义头** —— 如果鉴权不放过 OPTIONS，预检就会 401，
+浏览器进而**拦掉真正的请求**。
+
+症状特别有迷惑性：插件那侧报的是「**连不上后端**」（网络错误），
+而不是 401 —— 完全联想不到是鉴权。
+
+**而且这个 bug 用 curl 测不出来**（curl 不做预检）。
+必须显式模拟一次预检才能发现：
+
+    curl -i -X OPTIONS -H "Origin: https://www.bilibili.com" \\
+         -H "Access-Control-Request-Method: GET" \\
+         -H "Access-Control-Request-Headers: x-api-key" \\
+         http://127.0.0.1:8123/api/memory
 """
 import hmac
 
@@ -86,6 +103,20 @@ async def require_key(request: Request):
     path = request.url.path
     # 非 API 路径（静态页、首页）放行 —— 它们不返回任何用户数据
     if not path.startswith(_API_PREFIX) or path in PUBLIC_PATHS:
+        return None
+
+    # ★ CORS 预检必须放行。
+    #
+    # 浏览器对「跨域 + 自定义头（X-API-Key）」的请求会**先发一个 OPTIONS 预检**，
+    # 而按规范**预检请求不携带自定义头** —— 于是这里看不到密钥，一律 401；
+    # 浏览器见预检失败就**拦掉真正的请求**，插件那侧表现为"连不上后端"
+    # （不是 401，是网络错误，所以特别难联想到鉴权）。
+    #
+    # 放行是安全的：预检是「我能不能发这个请求」的能力查询，不读任何数据；
+    # CORS 中间件会直接应答它，**不会走到任何路由处理函数**。
+    #
+    # 注：这个 bug 用 curl 测不出来 —— curl 不做预检。见文件末尾的说明。
+    if request.method == "OPTIONS":
         return None
 
     if not config.API_AUTH_KEY:
