@@ -4,6 +4,47 @@
 (function () {
     "use strict";
 
+    // ── 访问密钥（后端部署到服务器并开启鉴权后，网页也需要）──
+    //
+    // 后端只监听本机时无需密钥；一旦对外提供服务就必须鉴权（见 backend/services/auth.py），
+    // 而那时页面上**每个 API 调用都会 401** —— 页面能打开、功能全废，
+    // 看起来像"部署坏了"。
+    //
+    // 这里用一个 fetch 包装：统一带上密钥；首次遇到 401 就问一次并重试。
+    // 不用额外做设置界面 —— 这个页面已经不再是主推入口（主推是浏览器插件）。
+    const _rawFetch = window.fetch.bind(window);
+    let _askedKey = false;
+
+    function apiKey() {
+        return localStorage.getItem("fw_api_key") || "";
+    }
+
+    window.fetch = function (url, opts) {
+        const u = typeof url === "string" ? url : (url && url.url) || "";
+        if (!u.startsWith("/api/")) return _rawFetch(url, opts);
+
+        opts = Object.assign({}, opts);
+        const headers = Object.assign({}, opts.headers || {});
+        const k = apiKey();
+        if (k) headers["X-API-Key"] = k;
+        opts.headers = headers;
+
+        return _rawFetch(url, opts).then(function (resp) {
+            // 401 且本次还没问过 → 问一次，存下来，重放这次请求
+            if (resp.status === 401 && !_askedKey) {
+                _askedKey = true;
+                const input = window.prompt(
+                    "后端已开启访问鉴权，请输入访问密钥\n" +
+                    "（服务端 .env 里的 API_AUTH_KEY，或 API_AUTH_KEYS 里分给你的那个）");
+                if (input && input.trim()) {
+                    localStorage.setItem("fw_api_key", input.trim());
+                    return window.fetch(url, opts);   // 走一遍包装，这次会带上密钥
+                }
+            }
+            return resp;
+        });
+    };
+
     // ── DOM元素 ──
     const videoFile = document.getElementById("videoFile");
     const uploadBtn = document.getElementById("uploadBtn");

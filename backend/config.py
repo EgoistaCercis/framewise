@@ -135,6 +135,23 @@ PORT = int(os.getenv("PORT", "8123"))
 # 生成：python -c "import secrets; print(secrets.token_urlsafe(24))"
 API_AUTH_KEY = os.getenv("API_AUTH_KEY", "")
 
+# 多用户：给每人发一个独立密钥，格式 `名字:密钥,名字:密钥`。
+# 与上面的单密钥**可以共存**（单密钥会以 "default" 这个名字参与记账）。
+#
+# 为什么建议每人一个而不是共享一个：
+#   ① 用量能**按人归因**，共享密钥下所有人的消耗混在一起，分不出谁
+#   ② 能**单独吊销**——共享密钥要踢掉一个人，等于所有人重新配置
+#   ③ 能**单独限额**（见下面的 API_DAILY_TOKEN_LIMIT）
+API_AUTH_KEYS = os.getenv("API_AUTH_KEYS", "")
+
+# 每人每天的 token 上限（输入 + 输出，按自然日）。0 = 不限制。
+# 超过后该密钥的请求一律返回 429。
+#
+# ★ 限额比"事后看报表"更重要：等从报表里发现异常，额度已经烧完了。
+#   给别人的密钥意味着他们能调 /api/videos/from_url 让你服务器下任意视频
+#   （占带宽和磁盘，不只是 token），所以宁可就设一个保守的数。
+API_DAILY_TOKEN_LIMIT = int(os.getenv("API_DAILY_TOKEN_LIMIT", "0"))
+
 # ASR 模式: "local" = faster-whisper, "api" = 硅基流动 SenseVoice
 ASR_MODE = os.getenv("ASR_MODE", "api")
 

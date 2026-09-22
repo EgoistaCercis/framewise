@@ -40,7 +40,8 @@ def init_db():
             cache_cost REAL NOT NULL DEFAULT 0,
             reasoning_cost REAL NOT NULL DEFAULT 0,
             total_cost REAL NOT NULL DEFAULT 0,
-            metadata TEXT                   -- JSON: question摘要等
+            metadata TEXT,                  -- JSON: question摘要等
+            caller TEXT                     -- 调用者（多用户归因），见 auth.current_caller()
         )
     """)
     conn.commit()
@@ -57,6 +58,8 @@ def _migrate():
         ("reasoning_tokens", "INTEGER NOT NULL DEFAULT 0"),
         ("cache_cost", "REAL NOT NULL DEFAULT 0"),
         ("reasoning_cost", "REAL NOT NULL DEFAULT 0"),
+        # 调用者（取自 auth 的 ContextVar；本地直连时是 "local"，评测等无请求上下文时是 ""）
+        ("caller", "TEXT"),
     ]:
         try:
             conn.execute(f"ALTER TABLE usage_log ADD COLUMN {col} {ddl}")
@@ -74,6 +77,7 @@ def log_usage(
     output_tokens: int = 0,
     video_id: str = None,
     metadata: str = None,
+    caller: str = "",
     cached_tokens: int = 0,
     reasoning_tokens: int = 0,
     timestamp: str = None,
@@ -91,13 +95,14 @@ def log_usage(
     conn.execute("""
         INSERT INTO usage_log (timestamp, model, provider, call_type, video_id,
                                input_tokens, output_tokens, cached_tokens, reasoning_tokens,
-                               input_cost, output_cost, cache_cost, reasoning_cost, total_cost, metadata)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               input_cost, output_cost, cache_cost, reasoning_cost, total_cost,
+                               metadata, caller)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         ts, model, provider, call_type, video_id,
         input_tokens, output_tokens, cached_tokens, reasoning_tokens,
         cost["input_cost"], cost["output_cost"], cost["cache_cost"],
-        cost["reasoning_cost"], cost["total_cost"], metadata,
+        cost["reasoning_cost"], cost["total_cost"], metadata, caller,
     ))
     conn.commit()
     conn.close()
@@ -248,3 +253,46 @@ def get_video_stats(video_id: str) -> dict:
 # 启动时初始化
 init_db()
 logger.debug(f"Usage DB initialized: {DB_PATH}")
+
+
+# ── 按调用者归因（多用户配额用）────────────────────────
+#
+# ⚠️ 时序：这些查询是在**请求进行中**被调用的（鉴权中间件要判断"还能不能发"），
+#    所以必须够快。SQLite 单机查询走索引，这个量级（个人部署）没问题；
+#    真要做成服务，再加内存缓存或 Redis。
+
+def tokens_used_today(caller: str) -> int:
+    """某个调用者**当天**已消耗的 token（输入+输出）。
+
+    用于每日配额判断。按自然日、本地时区（timestamp 存的就是本地 iso 格式）。
+    """
+    if not caller:
+        return 0
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS t "
+        "FROM usage_log WHERE caller = ? AND substr(timestamp, 1, 10) = ?",
+        (caller, datetime.now().strftime("%Y-%m-%d"))).fetchone()
+    conn.close()
+    return int(row["t"] or 0)
+
+
+def get_stats_by_caller() -> list:
+    """按调用者汇总用量与成本（谁用了多少）。
+
+    caller 为空的行是"无请求上下文"的调用（评测脚本、后台任务等），
+    单独归到 (未归因) 一项，不要和真实用户混在一起看。
+    """
+    conn = _get_conn()
+    rows = conn.execute("""
+        SELECT COALESCE(NULLIF(caller, ''), '(未归因)') AS who,
+               COUNT(*) AS calls,
+               SUM(input_tokens) AS input_tokens,
+               SUM(output_tokens) AS output_tokens,
+               SUM(cached_tokens) AS cached_tokens,
+               SUM(total_cost) AS total_cost,
+               MAX(timestamp) AS last_at
+        FROM usage_log GROUP BY who ORDER BY total_cost DESC
+    """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]

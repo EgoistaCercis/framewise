@@ -442,6 +442,18 @@ async def usage_by_video():
     return get_stats_by_video()
 
 
+@app.get("/api/usage/by_caller")
+async def usage_by_caller():
+    """**按调用者**分组统计（多用户下"谁用了多少"）。
+
+    与 by_video 的区别是归因维度：by_video 回答"哪个视频贵"，
+    by_caller 回答"谁在用、用了多少"——给多人发密钥后靠它看用量。
+    """
+    from backend.services.llm.cost_service import get_stats_by_caller
+    from backend.config import API_DAILY_TOKEN_LIMIT
+    return {"daily_limit": API_DAILY_TOKEN_LIMIT, "callers": get_stats_by_caller()}
+
+
 @app.get("/api/usage/video/{video_id}")
 async def usage_of_video(video_id: str):
     """单个视频的用量统计"""

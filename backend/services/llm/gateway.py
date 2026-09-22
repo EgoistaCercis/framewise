@@ -344,11 +344,15 @@ def _record(cfg: dict, call_type: str, *, input_tokens: int = 0,
     """
     try:
         from backend.services.llm.cost_service import log_usage
+        # 调用者从 ContextVar 取，**不用逐层传参** ——
+        # 记账点在网关深处，往上隔着 tools / Agent / 路由好几层，
+        # 为它给每一层加一个参数不划算（见 services/auth.py 的说明）。
+        from backend.services.auth import current_caller
         log_usage(
             model=cfg["model"], provider=cfg["provider"], call_type=call_type,
             input_tokens=input_tokens, output_tokens=output_tokens,
             cached_tokens=cached_tokens, reasoning_tokens=reasoning_tokens,
-            video_id=video_id,
+            video_id=video_id, caller=current_caller(),
         )
     except Exception as e:
         logger.warning(f"[Cost] 用量记账失败（不影响本次调用）: {e}")
