@@ -10,8 +10,15 @@ RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors
     && rm -rf /var/lib/apt/lists/*
 
 # Python 依赖
+#
+# ★ pip 必须换国内源，和上面 apt 一样 —— 依赖约 167MB
+#   （ctranslate2 63MB + onnxruntime 44MB + numpy 32MB + faiss 15MB…），
+#   直连 PyPI 在国内可能要下十几到几十分钟。
+#   用 ARG 让海外部署也能一键换回官方源：
+#       docker compose build --build-arg PIP_INDEX=https://pypi.org/simple
+ARG PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -i ${PIP_INDEX} -r requirements.txt
 
 # 应用代码
 COPY . .
