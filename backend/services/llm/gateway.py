@@ -690,8 +690,12 @@ async def chat_with_tools_stream(messages: list[dict], system_prompt: str = None
             for _, e in sorted(tool_calls.items())
         ]
         if not stream_usage:
-            # 同上：降级后按字符估算，别让主路径完全不入账
-            stream_usage = _estimate_usage(msgs, "".join(content_parts))
+            # 同上：降级后按字符估算，别让主路径完全不入账。
+            # ★ 工具调用的 name + arguments 也必须算进去 —— 那段 JSON 同样是
+            #   **completion token**，而工具重的轮次正是本产品的主要形态，
+            #   只算 content 会明显低估（有工具调用时 content 常常是空的）。
+            _out = "".join(content_parts) + "".join(e["name"] + e["arguments"] for e in tc_list)
+            stream_usage = _estimate_usage(msgs, _out)
             logger.debug("[Cost] 流式响应无 usage，已按字符估算记账")
         _record_usage(cfg, "chat", stream_usage, video_id)
         yield {"type": "done", "content": "".join(content_parts), "tool_calls": tc_list, "usage": stream_usage}
@@ -866,6 +870,12 @@ async def asr_url(audio_url: str, video_id: str = None) -> list[dict]:
         raise RuntimeError("ASR URL Api Key 未配置（ASR_URL_API_KEY），请在 .env 中设置")
     dashscope.api_key = api_key
 
+    # ★ 配额闸必须在**提交之前**。
+    #   下面 `Transcription.wait` 那步走 `_with_retry`，所以那里也会查 ——
+    #   但 `async_call` 一旦发出，任务就已提交、**计费已经开始**，再拦就晚了。
+    #   这是全仓库唯一一个"检查发生在计费之后"的入口（其余都走 _with_retry
+    #   在调用前查）。多查一次的成本可忽略：它是本函数里最轻的一步。
+    _check_quota()
     task = Transcription.async_call(
         model="paraformer-v2",
         file_urls=[audio_url],
