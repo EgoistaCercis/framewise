@@ -21,6 +21,17 @@ def _conn():
     return c
 
 
+def _scope() -> str:
+    """当前调用者的数据分区键（见 auth.current_scope）。
+
+    空串 = 本机直连 / 无请求上下文，沿用历史上那份共享的对话。
+    读写都从 ContextVar 取 —— 写入点在 main.py 的各个路由里，
+    漏一个就会把别人的问题存进自己的历史。
+    """
+    from backend.services.auth import current_scope
+    return current_scope()
+
+
 def init():
     """初始化表（含自动迁移）"""
     db = _conn()
@@ -43,7 +54,17 @@ def init():
         db.execute("ALTER TABLE conversations ADD COLUMN references_json TEXT DEFAULT ''")
     except sqlite3.OperationalError:
         pass  # 已存在
+    # 迁移：添加 scope 字段（v4，多人共用后端时的数据隔离）。
+    # 这里**不需要重建表**（不像 memory_cards）—— conversations 的主键是自增 id，
+    # scope 只是查询维度，不参与唯一性。
+    # 老行自动落到默认值 ''，也就是本机/历史那份共享桶，行为与改动前一致。
+    try:
+        db.execute("ALTER TABLE conversations ADD COLUMN scope TEXT NOT NULL DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass  # 已存在
     db.execute("CREATE INDEX IF NOT EXISTS idx_conv_video ON conversations(video_id, timestamp)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_conv_scope "
+               "ON conversations(scope, video_id, timestamp)")
     db.commit()
     db.close()
 
@@ -55,9 +76,10 @@ def save_message(video_id: str, role: str, content: str, content_type: str = "me
     refs_json = _json.dumps(references, ensure_ascii=False) if references else ""
     db = _conn()
     db.execute(
-        "INSERT INTO conversations (video_id, role, content, content_type, references_json, timestamp) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (video_id, role, content, content_type, refs_json, datetime.now().isoformat())
+        "INSERT INTO conversations "
+        "(scope, video_id, role, content, content_type, references_json, timestamp) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (_scope(), video_id, role, content, content_type, refs_json, datetime.now().isoformat())
     )
     db.commit()
     db.close()
@@ -79,11 +101,11 @@ def list_conversations() -> list[dict]:
             COUNT(*) as msg_count,
             MAX(timestamp) as last_time
         FROM conversations
-        WHERE content_type IS NULL OR content_type != 'summary'
+        WHERE scope = ? AND (content_type IS NULL OR content_type != 'summary')
         GROUP BY video_id
         ORDER BY last_time DESC
         LIMIT 100
-    """).fetchall()
+    """, (_scope(),)).fetchall()
     db.close()
 
     result = []
@@ -106,9 +128,9 @@ def get_history(video_id: str, limit: int = 20) -> list[dict]:
     db = _conn()
     rows = db.execute(
         "SELECT role, content, content_type, references_json, timestamp FROM conversations "
-        "WHERE video_id = ? AND content_type != 'summary' "
+        "WHERE scope = ? AND video_id = ? AND content_type != 'summary' "
         "ORDER BY timestamp ASC LIMIT ?",
-        (video_id, limit)
+        (_scope(), video_id, limit)
     ).fetchall()
     db.close()
     result = []
@@ -153,8 +175,8 @@ def _load_all_messages(video_id: str) -> list[dict]:
     db = _conn()
     rows = db.execute(
         "SELECT role, content, content_type FROM conversations "
-        "WHERE video_id = ? ORDER BY timestamp ASC",
-        (video_id,)
+        "WHERE scope = ? AND video_id = ? ORDER BY timestamp ASC",
+        (_scope(), video_id)
     ).fetchall()
     db.close()
     return [
@@ -243,4 +265,12 @@ async def get_recent_context(video_id: str) -> str:
             lines.append(f"**{role_label}**：{m['content']}")
 
     return "\n".join(lines) + "\n"
+
+
+# 启动时初始化（与 memory_service / cost_service 同一套约定：import 即建表）
+#
+# ★ 这一行原本是**缺失**的：`init()` 写好了却从来没人调用。今天不出问题纯粹是因为
+#   开发机的库早就建过表了 —— 全新部署（服务器上 data/ 干净时）第一条对话就会
+#   `no such table: conversations`。加 scope 列也依赖它，所以一并补上。
+init()
 

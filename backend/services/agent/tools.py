@@ -42,10 +42,45 @@ def _neutralize(text: str) -> str:
     return re.sub(r"<\s*/\s*external_content\s*>", "<\\/external_content>", text, flags=re.I)
 
 
+# 远程调用者的分区统一放在这个子目录下，与"本机自己的笔记"分开。
+#
+# ★ 为什么不直接平铺成 `NOTE_DIR/<名字>/`：那样根目录会同时是
+#   「我的笔记」和「所有人的父目录」，两个语义混在一起 ——
+#   本机（服务器主人）的笔记列表里会冒出一排人名目录，导出"我的笔记"时
+#   还会递归把别人的一并打包进去（实测确实如此）。
+#   隔一层 `_users/` 之后，本机的笔记目录就干净地还是它原来那个。
+_USERS_SUBDIR = "_users"
+
+
+def note_dir() -> str:
+    """**当前调用者**的笔记目录。
+
+    所有人共用一个目录时，A 不仅能读到 B 的笔记，还能**删掉**它们
+    （`delete_file` 走的是同一套路径解析）。所以按调用者分目录。
+
+    - 本机 / 无请求上下文 → 根目录 `NOTE_DIR/`，行为与改动前完全一致
+    - 具名远程调用者 → `NOTE_DIR/_users/<名字>/`
+
+    分区名取自 `.env` 里 `API_AUTH_KEYS` 的 `名字` 部分 —— 那是人手写的，
+    所以仍然要过滤一遍：一个手滑写成 `../x` 就能穿越到笔记目录之外。
+    允许的字符：数字、字母、下划线、连字符、CJK（中文名字直接可用）。
+    """
+    import os
+    import re
+    from backend.config import NOTE_DIR
+    from backend.services.auth import current_scope
+
+    scope = current_scope()
+    if not scope:
+        return NOTE_DIR
+    safe = re.sub(r"[^0-9A-Za-z_一-鿿-]", "_", scope)[:32] or "anonymous"
+    return os.path.join(NOTE_DIR, _USERS_SUBDIR, safe)
+
+
 def _safe_note_path(filename: str) -> str:
     """安全拼接笔记目录路径，禁止路径穿越（绝对路径、../ 等）与 Windows 保留名"""
     import os
-    from backend.config import NOTE_DIR
+    NOTE_DIR = note_dir()
 
     if not filename or os.path.isabs(filename):
         raise ValueError("非法文件路径")
@@ -331,16 +366,20 @@ class ListNotesTool(Tool):
 
     async def run(self, context: dict, **kwargs) -> str:
         import os
-        from backend.config import NOTE_DIR
-        os.makedirs(NOTE_DIR, exist_ok=True)
+        from backend.config import NOTE_DIR as _root
+        d = note_dir()  # 当前调用者自己的目录，别人的笔记看不到
+        os.makedirs(d, exist_ok=True)
         # 子目录也要列出来：用户手动在笔记目录放了文件夹时，
         # read_file("sub/x.md") 能读到、list_notes 却看不到，
         # 模型会据此判断"文件不存在"，然后放弃或瞎猜文件名
-        entries = sorted(os.listdir(NOTE_DIR))
+        entries = sorted(os.listdir(d))
+        if os.path.realpath(d) == os.path.realpath(_root):
+            # 本机看的是根目录：别人的分区（_users/）不算"我的笔记"，别列出来
+            entries = [e for e in entries if e != _USERS_SUBDIR]
         if not entries:
             return "笔记目录当前为空。"
         lines = [
-            f"- {e}/（目录）" if os.path.isdir(os.path.join(NOTE_DIR, e)) else f"- {e}"
+            f"- {e}/（目录）" if os.path.isdir(os.path.join(d, e)) else f"- {e}"
             for e in entries
         ]
         return ("笔记目录下的条目（仅顶层，子目录内容未展开）：\n"

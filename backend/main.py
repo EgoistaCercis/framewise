@@ -206,9 +206,18 @@ async def llm_config():
 
 @app.get("/api/note_dir")
 async def get_note_dir():
-    """返回当前笔记保存目录（后端文件系统路径）"""
-    from backend import config as _c
-    return {"note_dir": _c.NOTE_DIR}
+    """返回**当前调用者**实际使用的笔记目录（后端文件系统路径）。
+
+    远程调用者拿到的是自己的分区 `<NOTE_DIR>/_users/<名字>/`，
+    本机拿到的就是根 `NOTE_DIR` —— 与它实际读写的位置一致。
+
+    `editable` 告诉前端能不能改这个目录：只有本机可以（见 set_note_dir 的说明）。
+    远程调用者前端据此把输入框换成"导出到本地"，而不是留一个点了必然 403 的按钮。
+    """
+    from backend.services.agent.tools import note_dir
+    from backend.services.auth import current_scope
+    scope = current_scope()
+    return {"note_dir": note_dir(), "scope": scope, "editable": not scope}
 
 
 class NoteDirUpdate(BaseModel):
@@ -217,9 +226,19 @@ class NoteDirUpdate(BaseModel):
 
 @app.post("/api/note_dir")
 async def set_note_dir(req: NoteDirUpdate):
-    """设置笔记保存目录（更新内存 + 持久化到 .env）"""
+    """设置笔记保存目录（更新内存 + 持久化到 .env）。
+
+    ★ **只允许本机调用**。这是个"把服务器上的任意目录变成可写目录"的开关：
+    设成 /root/.ssh 再存一个叫 authorized_keys 的笔记，就是一条拿到 shell 的路
+    （`_safe_note_path` 只保证写在 NOTE_DIR 里面，而 NOTE_DIR 本身是指定进来的）。
+    所以远程调用者一律拒绝 —— 部署在服务器上时改 `.env` 里的 NOTE_DIR 并重启。
+    """
     from backend import config as _c
+    from backend.services.auth import current_scope
     import os as _os
+
+    if current_scope():
+        raise HTTPException(403, "笔记目录只能在服务器本机设置（改 .env 的 NOTE_DIR 后重启）")
 
     path = req.note_dir.strip()
     if not path:
@@ -229,6 +248,57 @@ async def set_note_dir(req: NoteDirUpdate):
     _save_note_dir_to_env(path)
     logger.info(f"笔记目录已设置为: {path}")
     return {"note_dir": _c.NOTE_DIR}
+
+
+@app.get("/api/notes/export")
+async def export_notes():
+    """把**当前调用者**的笔记打包成一个 zip 下载。
+
+    远程连接后端时笔记落在服务器上（各自的分区目录）。这个接口让人把自己的那份
+    拉到本地 —— 换机器、备份、或者只是"我想自己留一份"，不必登服务器翻目录。
+
+    只打包自己的目录：`note_dir()` 就是按调用者解析出来的，天然不会带上别人的。
+    """
+    import io as _io
+    import zipfile
+    from urllib.parse import quote
+    from fastapi.responses import StreamingResponse
+    from backend.services.agent.tools import note_dir
+    from backend.services.auth import current_scope
+
+    from backend.services.agent.tools import _USERS_SUBDIR
+    from backend.config import NOTE_DIR as _root
+
+    src = note_dir()
+    scope = current_scope()
+    # 本机导出的是根目录，而根目录下还有别人的分区（_users/）——
+    # 不剥掉就会把全服务器所有人的笔记打包进"我的笔记"zip 里
+    at_root = os.path.realpath(src) == os.path.realpath(_root)
+    buf = _io.BytesIO()
+    count = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        if os.path.isdir(src):
+            for root, dirs, files in os.walk(src):
+                if at_root and root == src and _USERS_SUBDIR in dirs:
+                    dirs.remove(_USERS_SUBDIR)
+                for fn in files:
+                    full = os.path.join(root, fn)
+                    try:
+                        # 压平相对路径：解压出来是一层目录，不带后端的绝对路径
+                        z.write(full, os.path.relpath(full, src))
+                        count += 1
+                    except OSError as e:
+                        # 单个文件读不了（权限/被占用）不该让整包失败
+                        logger.warning(f"导出笔记跳过 {full}：{e}")
+    buf.seek(0)
+    logger.info(f"导出笔记：[{scope or 'local'}] {count} 个文件")
+    # 调用者名可能是中文 → 非 ASCII 直接塞 Content-Disposition 会把响应头搞坏，
+    # 用 RFC 5987 的 filename*=UTF-8'' 形式
+    fname = quote(f"framewise-notes-{scope or 'local'}.zip")
+    return StreamingResponse(
+        buf, media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{fname}"},
+    )
 
 
 class ApproveRequest(BaseModel):
@@ -267,11 +337,19 @@ async def clear_memory():
 
 @app.post("/api/videos/{video_id}/captured_subtitles_url")
 async def captured_subtitles_url(video_id: str, req: dict):
-    """接收浏览器拦截的B站字幕URL，下载、缓存、建立索引（一步到位）"""
+    """接收浏览器拦截的B站字幕URL：下载并缓存字幕，等用户手动触发索引。
+
+    注意：**这个端点不建索引**（原 docstring 写"建立索引（一步到位）"，与实现不符，
+    排查问题时容易被它带偏）。真正建索引的是 `_process_url_task`，
+    由用户在插件里点 🔄 触发。
+    """
     from backend.services.rag_pipeline.chunk_service import chunk_subtitles
     from backend.services.rag_pipeline.embedding_service import embed_texts
     from backend.services.rag_pipeline.vector_store import build_index
-    from backend.services.media.cache_service import save_subtitle_cache
+    from backend.services.media.cache_service import (
+        save_subtitle_cache, subtitle_cache_exists, load_subtitle_cache,
+        embedding_cache_exists,
+    )
     import httpx
 
     state = video_states.get(video_id)
@@ -310,12 +388,39 @@ async def captured_subtitles_url(video_id: str, req: dict):
         raise HTTPException(400, "字幕数据为空")
 
     logger.info(f"[{video_id}] B站 subtitle: {len(subtitles)} lines (cached, wait for index)")
+
+    # ★ 先看**原来的**缓存，再写：判断这次抓到的字幕是不是和已有的一模一样。
+    #
+    # 为什么必须判断：插件每次在视频页拦截到播放器字幕都会 POST 一次
+    # （extension/content.js 的 fw-subtitle）。这里原来是**无条件**把状态置成
+    # "subtitles"，于是"重新打开一个已经处理好的视频页"＝ 把 ready 打回未就绪：
+    #   · 聊天接口直接 400（视频的索引明明已经建好了）
+    #   · 还得再点一次 🔄 重新索引，而那趟 embedding 是白花钱的
+    # 库里 30 个视频卡在 subtitles、其中 11 个索引早已存在，就是这么来的。
+    prev_same = False
+    if subtitle_cache_exists(video_id):
+        try:
+            prev_same = load_subtitle_cache(video_id) == subtitles
+        except (OSError, ValueError):
+            prev_same = False
+
     state["subtitles"] = subtitles
     state["video_hash"] = video_id
     # 来源标记为 official：ASR 兜底结果不会覆盖它
     save_subtitle_cache(video_id, subtitles, source="official")
 
-    # 缓存字幕，中止正在跑的后台任务（如有），等用户手动触发索引
+    if prev_same and embedding_cache_exists(video_id):
+        # 字幕没变、索引也在 → 这个视频本来就是可用的，显式置回 ready。
+        # 这里不是"保持原状态"而是**主动纠正**：老数据里那批卡在 subtitles
+        # 的视频，靠这一步就能自愈（下次打开该视频页时）。
+        state["status"] = "ready"
+        state["progress"] = 100
+        state["progress_text"] = "就绪"
+        _save_states()
+        logger.info(f"[{video_id}] 字幕未变且索引已在，状态置回 ready")
+        return {"status": "ok", "segments": len(subtitles), "state": "ready"}
+
+    # 字幕有变化（或还没有索引）→ 缓存字幕，中止正在跑的后台任务（如有），等用户手动触发索引
     state["status"] = "subtitles"
     state["progress"] = 30
     state["progress_text"] = "字幕已缓存，点击 🔄 处理"

@@ -48,57 +48,161 @@ def _now() -> str:
     return datetime.now().isoformat()
 
 
+# 目标 schema。scope 是**主键的第一列**（空串 = 本机/历史那份共享桶）。
+#
+# ★ 为什么 scope 必须进主键而不是当普通列：主键是 (category, subcategory, key) 时，
+#   alice 和 bob 存同一个 key 会互相顶掉 —— 后写的那份静默覆盖前一份。
+#   普通列 + 查询过滤挡不住 UNIQUE 约束。
+_DDL_MEMORY_CARDS = """
+    CREATE TABLE IF NOT EXISTS memory_cards (
+        scope TEXT NOT NULL DEFAULT '',
+        category TEXT NOT NULL,
+        subcategory TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        hit_count INTEGER DEFAULT 1,   -- 被"再次确认"的次数（强度）
+        last_seen TEXT,                -- 最后一次被确认（≠ updated_at）
+        created_at TEXT,
+        source TEXT,                   -- 哪一轮/什么理由写进来的
+        PRIMARY KEY (scope, category, subcategory, key)
+    )
+"""
+
+_DDL_MEMORY_ARCHIVE = """
+    CREATE TABLE IF NOT EXISTS memory_cards_archive (
+        scope TEXT NOT NULL DEFAULT '',
+        category TEXT, subcategory TEXT, key TEXT, value TEXT,
+        updated_at TEXT, hit_count INTEGER, last_seen TEXT, created_at TEXT,
+        source TEXT, archived_at TEXT NOT NULL, reason TEXT,
+        PRIMARY KEY (scope, category, subcategory, key, archived_at)
+    )
+"""
+
+_DDL_MEMORY_CONFLICTS = """
+    CREATE TABLE IF NOT EXISTS memory_conflicts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        scope TEXT NOT NULL DEFAULT '',
+        category TEXT, subcategory TEXT, key TEXT,
+        old_value TEXT, new_value TEXT, reason TEXT,
+        created_at TEXT NOT NULL
+    )
+"""
+
+# 老库补列（ALTER TABLE ADD COLUMN 没有 IF NOT EXISTS，靠 PRAGMA 先查）
+_CARD_EXTRA_COLUMNS = (("hit_count", "INTEGER DEFAULT 1"), ("last_seen", "TEXT"),
+                       ("created_at", "TEXT"), ("source", "TEXT"))
+
+
+def _scope() -> str:
+    """当前调用者的数据分区键（见 auth.current_scope）。
+
+    空串 = 本机直连 / 无请求上下文（评测脚本、后台任务），沿用历史那份共享数据。
+    放在这里而不是让每个调用方传参：写入与读取都发生在同一个请求里，
+    从 ContextVar 取最不容易漏 —— 漏一个写入点就会串号。
+    """
+    from backend.services.auth import current_scope
+    return current_scope()
+
+
+def _table_exists(db, name: str) -> bool:
+    return db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
+
+
+def _columns(db, name: str) -> set:
+    return {r[1] for r in db.execute(f"PRAGMA table_info({name})")}
+
+
+def _recover_orphans(db):
+    """把半途而废的迁移留下的孤儿表并回主表。
+
+    背景：给 `memory_cards` 的主键加 `scope` 时，SQLite 只能
+    「改名旧表 → 建新表 → 搬数据」。有一次迁移走到一半（旧表已改名、数据还没搬）
+    就中断了，结果主表停在空表上、真实数据留在 `_memory_cards_old` 里 ——
+    表现是"长期记忆莫名其妙全没了"，而且**不报任何错**。
+
+    这里做一次自愈：孤儿表的行按scope=''灌回主表，然后删掉孤儿表。幂等。
+    """
+    for orphan, target in (("_memory_cards_old", "memory_cards"),):
+        if not (_table_exists(db, orphan) and _table_exists(db, target)):
+            continue
+        ocols, tcols = _columns(db, orphan), _columns(db, target)
+        base = ["category", "subcategory", "key", "value", "updated_at"]
+        if not set(base) <= ocols:
+            continue  # 不是我们认识的那张孤儿表，别乱动
+        extra = [c for c in ("hit_count", "last_seen", "created_at", "source") if c in ocols]
+        cols = base + extra
+        if "scope" in tcols:
+            cols = ["scope"] + cols
+            select = "''" + "".join(f", {c}" for c in base + extra)
+        else:
+            select = ", ".join(cols)
+        db.execute(f"INSERT OR IGNORE INTO {target} ({', '.join(cols)}) "
+                   f"SELECT {select} FROM {orphan}")
+        n = db.execute(f"SELECT COUNT(*) FROM {orphan}").fetchone()[0]
+        db.execute(f"DROP TABLE {orphan}")
+        logger.warning(f"[memory] 发现半途迁移留下的孤儿表 {orphan}，已把 {n} 行并回 {target}")
+
+
+def _rebuild_with_scope(db, table: str, ddl: str, cols: list):
+    """给已有表加上 `scope` 主键列 —— 建新表 → 搬数据（scope=''）→ 换名。"""
+    tmp = f"_{table}_rebuild"
+    db.execute(f"DROP TABLE IF EXISTS {tmp}")
+    db.execute(f"ALTER TABLE {table} RENAME TO {tmp}")
+    db.execute(ddl)                      # 建出目标结构的新表
+    db.execute(f"INSERT INTO {table} (scope, {', '.join(cols)}) "
+               f"SELECT '', {', '.join(cols)} FROM {tmp}")
+    n = db.execute(f"SELECT COUNT(*) FROM {tmp}").fetchone()[0]
+    db.execute(f"DROP TABLE {tmp}")
+    logger.info(f"[memory] {table} 重建完成：{n} 行迁到共享分区（scope=''）")
+
+
 def init():
     """建表 + 迁移。幂等，可对已有库重复执行。"""
     db = _conn()
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS memory_cards (
-            category TEXT NOT NULL,
-            subcategory TEXT NOT NULL,
-            key TEXT NOT NULL,
-            value TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            hit_count INTEGER DEFAULT 1,   -- 被"再次确认"的次数（强度）
-            last_seen TEXT,                -- 最后一次被确认（≠ updated_at）
-            created_at TEXT,
-            source TEXT,                   -- 哪一轮/什么理由写进来的
-            PRIMARY KEY (category, subcategory, key)
-        )
-    """)
-    # 迁移老库：ALTER TABLE ADD COLUMN 没有 IF NOT EXISTS，靠 PRAGMA 先查
-    cols = {r[1] for r in db.execute("PRAGMA table_info(memory_cards)")}
-    added = []
-    for name, ddl in (("hit_count", "INTEGER DEFAULT 1"), ("last_seen", "TEXT"),
-                      ("created_at", "TEXT"), ("source", "TEXT")):
-        if name not in cols:
-            db.execute(f"ALTER TABLE memory_cards ADD COLUMN {name} {ddl}")
-            added.append(name)
-    if added:
-        # 老行没有这些值 → 用 updated_at 回填（只能近似，"最后写入"当"最后确认"）
-        db.execute("UPDATE memory_cards SET last_seen = updated_at WHERE last_seen IS NULL")
-        db.execute("UPDATE memory_cards SET created_at = updated_at WHERE created_at IS NULL")
-        db.execute("UPDATE memory_cards SET hit_count = 1 WHERE hit_count IS NULL")
-        logger.info(f"[memory] schema 迁移完成，补列：{added}")
 
-    # 归档表：结构同 memory_cards + 归档时间与原因（可回查、可恢复）
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS memory_cards_archive (
-            category TEXT, subcategory TEXT, key TEXT, value TEXT,
-            updated_at TEXT, hit_count INTEGER, last_seen TEXT, created_at TEXT,
-            source TEXT, archived_at TEXT NOT NULL, reason TEXT,
-            PRIMARY KEY (category, subcategory, key, archived_at)
-        )
-    """)
-    # 冲突日志：REPLACE 被拒绝时落这里。
+    # ① 先清掉半途迁移的烂摊子（必须在重建之前，否则孤儿表的数据赶不上这趟车）
+    _recover_orphans(db)
+
+    # ② memory_cards —— scope 必须进主键
+    if not _table_exists(db, "memory_cards"):
+        db.execute(_DDL_MEMORY_CARDS)
+    else:
+        # 先把老库缺的列补齐，后面搬数据时 SELECT 才引用得到
+        cols = _columns(db, "memory_cards")
+        added = []
+        for name, ddl in _CARD_EXTRA_COLUMNS:
+            if name not in cols:
+                db.execute(f"ALTER TABLE memory_cards ADD COLUMN {name} {ddl}")
+                added.append(name)
+        if added:
+            # 老行没有这些值 → 用 updated_at 回填（只能近似，"最后写入"当"最后确认"）
+            db.execute("UPDATE memory_cards SET last_seen = updated_at WHERE last_seen IS NULL")
+            db.execute("UPDATE memory_cards SET created_at = updated_at WHERE created_at IS NULL")
+            db.execute("UPDATE memory_cards SET hit_count = 1 WHERE hit_count IS NULL")
+            logger.info(f"[memory] schema 迁移完成，补列：{added}")
+        if "scope" not in _columns(db, "memory_cards"):
+            _rebuild_with_scope(db, "memory_cards", _DDL_MEMORY_CARDS,
+                                ["category", "subcategory", "key", "value", "updated_at",
+                                 "hit_count", "last_seen", "created_at", "source"])
+
+    # ③ 归档表：结构同 memory_cards + 归档时间与原因（可回查、可恢复）
+    if not _table_exists(db, "memory_cards_archive"):
+        db.execute(_DDL_MEMORY_ARCHIVE)
+    elif "scope" not in _columns(db, "memory_cards_archive"):
+        _rebuild_with_scope(db, "memory_cards_archive", _DDL_MEMORY_ARCHIVE,
+                            ["category", "subcategory", "key", "value", "updated_at",
+                             "hit_count", "last_seen", "created_at", "source",
+                             "archived_at", "reason"])
+
+    # ④ 冲突日志：REPLACE 被拒绝时落这里（无主键约束，补列即可）。
     # 不放 logger —— 要能统计"哪个 key 反复冲突"，那说明模型没理解用户意图。
-    db.execute("""
-        CREATE TABLE IF NOT EXISTS memory_conflicts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category TEXT, subcategory TEXT, key TEXT,
-            old_value TEXT, new_value TEXT, reason TEXT,
-            created_at TEXT NOT NULL
-        )
-    """)
+    if not _table_exists(db, "memory_conflicts"):
+        db.execute(_DDL_MEMORY_CONFLICTS)
+    elif "scope" not in _columns(db, "memory_conflicts"):
+        db.execute("ALTER TABLE memory_conflicts ADD COLUMN scope TEXT NOT NULL DEFAULT ''")
+
     db.commit()
     db.close()
 
@@ -114,51 +218,55 @@ def save_card(category: str, subcategory: str, key: str, value: str,
     if not value:
         return {"action": "rejected", "reason": "空值"}
 
+    scope = _scope()
     db = _conn()
     cur = db.execute(
-        "SELECT value FROM memory_cards WHERE category=? AND subcategory=? AND key=?",
-        (category, subcategory, key)).fetchone()
+        "SELECT value FROM memory_cards WHERE scope=? AND category=? AND subcategory=? AND key=?",
+        (scope, category, subcategory, key)).fetchone()
     arch = db.execute(
         "SELECT hit_count FROM memory_cards_archive "
-        "WHERE category=? AND subcategory=? AND key=? ORDER BY archived_at DESC LIMIT 1",
-        (category, subcategory, key)).fetchone()
+        "WHERE scope=? AND category=? AND subcategory=? AND key=? "
+        "ORDER BY archived_at DESC LIMIT 1",
+        (scope, category, subcategory, key)).fetchone()
     now = _now()
 
     if cur is None and arch is not None:
         # RESTORE：恢复归档卡而不是新建，继承原强度
         db.execute(
-            "INSERT INTO memory_cards (category, subcategory, key, value, updated_at, "
-            "hit_count, last_seen, created_at, source) VALUES (?,?,?,?,?,?,?,?,?)",
-            (category, subcategory, key, value, now,
+            "INSERT INTO memory_cards (scope, category, subcategory, key, value, updated_at, "
+            "hit_count, last_seen, created_at, source) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (scope, category, subcategory, key, value, now,
              (arch["hit_count"] or 1) + 1, now, now, reason or "restored"))
-        db.execute("DELETE FROM memory_cards_archive WHERE category=? AND subcategory=? AND key=?",
-                   (category, subcategory, key))
+        db.execute("DELETE FROM memory_cards_archive "
+                   "WHERE scope=? AND category=? AND subcategory=? AND key=?",
+                   (scope, category, subcategory, key))
         action, old = "restored", None
     elif cur is None:
         db.execute(
-            "INSERT INTO memory_cards (category, subcategory, key, value, updated_at, "
-            "hit_count, last_seen, created_at, source) VALUES (?,?,?,?,?,?,?,?,?)",
-            (category, subcategory, key, value, now, 1, now, now, reason or ""))
+            "INSERT INTO memory_cards (scope, category, subcategory, key, value, updated_at, "
+            "hit_count, last_seen, created_at, source) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (scope, category, subcategory, key, value, now, 1, now, now, reason or ""))
         action, old = "new", None
     elif (cur["value"] or "").strip() == value:
         # REINFORCE：加权，不覆盖
         db.execute(
             "UPDATE memory_cards SET hit_count = COALESCE(hit_count, 1) + 1, last_seen = ? "
-            "WHERE category=? AND subcategory=? AND key=?",
-            (now, category, subcategory, key))
+            "WHERE scope=? AND category=? AND subcategory=? AND key=?",
+            (now, scope, category, subcategory, key))
         action, old = "reinforced", cur["value"]
     elif overwrite:
         db.execute(
             "UPDATE memory_cards SET value=?, updated_at=?, last_seen=?, source=? "
-            "WHERE category=? AND subcategory=? AND key=?",
-            (value, now, now, reason or "user_override", category, subcategory, key))
+            "WHERE scope=? AND category=? AND subcategory=? AND key=?",
+            (value, now, now, reason or "user_override",
+             scope, category, subcategory, key))
         action, old = "replaced", cur["value"]
     else:
         # CONFLICT：不写，记日志
         db.execute(
-            "INSERT INTO memory_conflicts (category, subcategory, key, old_value, new_value, "
-            "reason, created_at) VALUES (?,?,?,?,?,?,?)",
-            (category, subcategory, key, cur["value"], value, reason, now))
+            "INSERT INTO memory_conflicts (scope, category, subcategory, key, old_value, "
+            "new_value, reason, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (scope, category, subcategory, key, cur["value"], value, reason, now))
         action, old = "conflict", cur["value"]
 
     db.commit()
@@ -179,19 +287,22 @@ def archive_expired(days: int = None) -> int:
     cutoff = (datetime.now() - timedelta(days=days)).isoformat()
     marks = ",".join("?" * len(_TTL_CLASSES))
     db = _conn()
+    # ★ 这是**全局**扫描（谁的卡过期都要扫），所以下面删行时必须用 r["scope"]，
+    #   不能用当前调用者的 scope —— 否则会把别人的卡从主表删掉、却没归档。
     rows = db.execute(
         f"SELECT * FROM memory_cards WHERE category IN ({marks}) "
         f"AND COALESCE(last_seen, updated_at) < ?", (*_TTL_CLASSES, cutoff)).fetchall()
     for r in rows:
         db.execute(
-            "INSERT OR REPLACE INTO memory_cards_archive (category, subcategory, key, value, "
-            "updated_at, hit_count, last_seen, created_at, source, archived_at, reason) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (r["category"], r["subcategory"], r["key"], r["value"], r["updated_at"],
+            "INSERT OR REPLACE INTO memory_cards_archive (scope, category, subcategory, key, "
+            "value, updated_at, hit_count, last_seen, created_at, source, archived_at, reason) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (r["scope"], r["category"], r["subcategory"], r["key"], r["value"], r["updated_at"],
              r["hit_count"], r["last_seen"], r["created_at"], r["source"],
              _now(), _ARCHIVE_REASON_TTL))
-        db.execute("DELETE FROM memory_cards WHERE category=? AND subcategory=? AND key=?",
-                   (r["category"], r["subcategory"], r["key"]))
+        db.execute("DELETE FROM memory_cards "
+                   "WHERE scope=? AND category=? AND subcategory=? AND key=?",
+                   (r["scope"], r["category"], r["subcategory"], r["key"]))
     if rows:
         db.commit()
         logger.info(f"[memory] 归档 {len(rows)} 张超期卡（>{days} 天未再出现）")
@@ -207,14 +318,16 @@ def delete_card(category: str, subcategory: str = None, key: str = None):
     - category + subcategory + key：删除具体键值对
     """
     db = _conn()
+    scope = _scope()   # 只能删自己的（/api/memory 的"清空"也走这里）
     if subcategory is None:
-        db.execute("DELETE FROM memory_cards WHERE category = ?", (category,))
+        db.execute("DELETE FROM memory_cards WHERE scope = ? AND category = ?", (scope, category))
     elif key is None:
-        db.execute("DELETE FROM memory_cards WHERE category = ? AND subcategory = ?",
-                   (category, subcategory))
+        db.execute("DELETE FROM memory_cards WHERE scope = ? AND category = ? AND subcategory = ?",
+                   (scope, category, subcategory))
     else:
-        db.execute("DELETE FROM memory_cards WHERE category = ? AND subcategory = ? AND key = ?",
-                   (category, subcategory, key))
+        db.execute("DELETE FROM memory_cards "
+                   "WHERE scope = ? AND category = ? AND subcategory = ? AND key = ?",
+                   (scope, category, subcategory, key))
     db.commit()
     db.close()
 
@@ -224,7 +337,8 @@ def get_all_cards() -> dict:
     db = _conn()
     rows = db.execute(
         "SELECT category, subcategory, key, value FROM memory_cards "
-        "ORDER BY category, subcategory, updated_at DESC").fetchall()
+        "WHERE scope = ? ORDER BY category, subcategory, updated_at DESC",
+        (_scope(),)).fetchall()
     db.close()
     tree = {}
     for r in rows:
@@ -271,7 +385,7 @@ def format_cards_for_prompt(budget_tokens: int = None) -> str:
     db = _conn()
     rows = db.execute(
         "SELECT category, subcategory, key, value, hit_count, last_seen, updated_at "
-        "FROM memory_cards").fetchall()
+        "FROM memory_cards WHERE scope = ?", (_scope(),)).fetchall()
     db.close()
     if not rows:
         return ""

@@ -289,9 +289,14 @@ async def prepare_frame_context(video_hash: str, question: str, frame_descriptio
 def _get_memory_context() -> str:
     """加载长期记忆（用户偏好等），拼入 Prompt"""
     try:
-        from backend.services.memory.memory_service import format_memories_for_prompt
-        return format_memories_for_prompt()
-    except Exception:
+        from backend.services.memory.memory_service import format_cards_for_prompt
+        return format_cards_for_prompt()
+    except Exception as e:
+        # ★ 这里原本是裸 `except Exception: return ""`，把一个**函数名写错**
+        #   （format_memories_for_prompt 早就改名成 format_cards_for_prompt）
+        #   吃成了"记忆功能静默失效" —— 日志里一个字都没有，只能靠人偶然发现。
+        #   今后这一层失败必须在日志里留痕。
+        logger.warning(f"记忆注入失败，本轮不注入：{e}")
         return ""
 
 

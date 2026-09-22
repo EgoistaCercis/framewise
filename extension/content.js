@@ -117,7 +117,8 @@
             chart: '<path d="M3 3v18h18"/><path d="M7 15l4-4 4 3 5-6"/>',
             moon: '<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>',
             folder: '<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"/>',
-            send: '<path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/>'
+            send: '<path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/>',
+            download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>'
         };
         return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="width:' + size + 'px;height:' + size + 'px;display:block;">' + (paths[name] || '') + '</svg>';
     }
@@ -266,10 +267,11 @@
         '</div>' +
         '<div style="padding:10px;border-top:1px solid var(--fw-border);">' +
         '<div class="fws-label" style="margin-bottom:6px;display:flex;align-items:center;gap:7px;">' + icon('folder', 14) + '笔记保存目录<span id="fw-note-dir" style="margin-left:auto;color:var(--fw-accent);word-break:break-all;max-width:55%;text-align:right;">加载中…</span></div>' +
-        '<div style="display:flex;gap:4px;">' +
+        '<div id="fw-note-edit" style="display:flex;gap:4px;">' +
         '<input id="fw-note-input" placeholder="后端文件路径" style="flex:1;padding:7px 8px;background:var(--fw-surface);border:1px solid var(--fw-border);border-radius:8px;color:var(--fw-text);font-size:11.5px;outline:none;">' +
         '<button id="fw-note-save" style="padding:7px 10px;background:var(--fw-primary);border:none;border-radius:8px;color:#fff;cursor:pointer;font-size:11.5px;">保存</button></div>' +
-        '<div class="fws-hint" style="margin-top:6px;font-size:10px;">笔记由 Agent 写入后端笔记目录（write_file 工具）</div></div>' +
+        '<button id="fw-note-export" style="margin-top:6px;width:100%;padding:7px 10px;display:flex;align-items:center;justify-content:center;gap:6px;background:var(--fw-surface);border:1px solid var(--fw-border);border-radius:8px;color:var(--fw-text);cursor:pointer;font-size:11.5px;">' + icon('download', 13) + '导出笔记到本地</button>' +
+        '<div class="fws-hint" id="fw-note-hint" style="margin-top:6px;font-size:10px;">笔记由 Agent 写入后端笔记目录（write_file 工具）</div></div>' +
         '</div>';
     setwin.style.left = (window.innerWidth - 280) + "px";
     setwin.style.top = "110px";
@@ -330,9 +332,21 @@
 
     var noteDir = document.getElementById("fw-note-dir");
     var noteInput = document.getElementById("fw-note-input");
-    // 加载后端当前 NOTE_DIR
+    var noteHint = document.getElementById("fw-note-hint");
+    var noteEdit = document.getElementById("fw-note-edit");
+    // 加载后端当前笔记目录（远程调用者拿到的是自己在服务器上的分区）
     apiFetch("/api/note_dir").then(function (r) { return r.json(); })
-        .then(function (d) { noteDir.textContent = d.note_dir; noteInput.value = d.note_dir; })
+        .then(function (d) {
+            noteDir.textContent = d.note_dir;
+            noteInput.value = d.note_dir;
+            if (d.editable === false) {
+                // 远程连接：目录在服务器上、且只有服务器本机能改。
+                // 与其留一个点了必然 403 的输入框，不如换成一句说明 + 导出按钮。
+                noteEdit.style.display = "none";
+                noteHint.innerHTML = "笔记存在<b>服务器</b>上你专属的目录里（别人看不到也删不掉）。" +
+                                     "想存到本机就点上面的导出。";
+            }
+        })
         .catch(function () { noteDir.textContent = "获取失败"; });
     document.getElementById("fw-note-save").onclick = function (ev) {
         ev.stopPropagation();
@@ -342,6 +356,30 @@
             .then(function (r) { return r.json(); })
             .then(function (d) { noteDir.textContent = d.note_dir; addMsg("system", "📁 笔记保存目录已设置：" + d.note_dir); })
             .catch(function () { addMsg("error", "设置失败"); });
+    };
+    // ── 导出笔记：后端把当前调用者那一份打包成 zip ──
+    document.getElementById("fw-note-export").onclick = function (ev) {
+        ev.stopPropagation();
+        var btn = this;
+        btn.disabled = true;
+        addMsg("system", "📦 正在打包笔记…");
+        apiFetch("/api/notes/export").then(function (r) {
+            if (!r.ok) { throw new Error("后端返回 " + r.status); }
+            return r.blob();
+        }).then(function (blob) {
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement("a");
+            a.href = url;
+            a.download = "framewise-notes.zip";
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            // 不要立刻 revoke：偶发会在浏览器真正读完之前就把内容撤掉，下载变成 0 字节
+            setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+            addMsg("system", "✅ 笔记已导出到浏览器下载目录");
+        }).catch(function (e) {
+            addMsg("error", "导出失败：" + (e.message || e));
+        }).finally(function () { btn.disabled = false; });
     };
 
     function setAutoState() {

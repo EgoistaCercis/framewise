@@ -91,6 +91,24 @@ def current_caller() -> str:
     return _current_caller.get()
 
 
+def current_scope() -> str:
+    """数据分区键 —— 用来把「谁的对话 / 记忆 / 笔记」分开存放。
+
+    与 `current_caller()` 的区别**只在"本机"那条路上**：
+
+    - 具名远程调用者 → 返回名字，各看各的
+    - 本机直连（`LOCAL_CALLER`）/ 无请求上下文 → 返回**空串**，沿用历史共享数据
+
+    本机返回空串是刻意的：这个项目一直是单人本地用的，已有的对话和笔记都在
+    "没有分区"的那个桶里。给本机新开一个 `local/` 分区，老用户打开就是空的 ——
+    数据明明还在磁盘上，只是没被去找。所以本机必须继续读老桶。
+
+    调用方约定：拿到空串就用「不分区」的路径（根目录 / 不筛 caller 的查询）。
+    """
+    caller = current_caller()
+    return "" if caller in (_NO_CALLER, LOCAL_CALLER) else caller
+
+
 def _load_keys() -> dict:
     """解析出 {调用者名: 密钥}。
 
