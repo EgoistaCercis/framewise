@@ -57,6 +57,7 @@ asyncio 的 ContextVar 天然按任务隔离，**并发请求不会串**。
 （项目里 `eval_v4_agent.py` 用的是同一个机制，解决同一类问题。）
 """
 import hmac
+import re
 from contextvars import ContextVar
 
 from fastapi import Request
@@ -64,6 +65,30 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 
 from backend import config
+
+# 分区名允许的字符：数字、字母、下划线、连字符、CJK。
+# ★ 校验与清洗共用同一份字符类（这里定义，tools.note_dir 引用）——
+#   两边各写一份的话，很容易出现"校验放行了、清洗后又撞到别人"的缝。
+_SCOPE_DISALLOWED = re.compile(r"[^0-9A-Za-z_一-鿿-]")
+_SCOPE_NAME_RE = re.compile(r"^[0-9A-Za-z_一-鿿-]{1,32}$")
+
+# `API_AUTH_KEY`（单个共享密钥）在内部用的名字
+SHARED_KEY_NAME = "default"
+
+
+def sanitize_scope_name(name: str) -> str:
+    """把调用者名字规整成安全的目录名。
+
+    这是**清洗**不是**校验**：`alice.x` 与 `alice_x` 都会被清成 `alice_x`，
+    两个不同的人会静默落进同一份数据。所以名字的合法性在 `_validate_names`
+    里单独把关，这里的清洗只作纵深防御。
+    """
+    return _SCOPE_DISALLOWED.sub("_", (name or "").strip())[:32]
+
+
+def scope_name_ok(name: str) -> bool:
+    """名字是否合规（合规的名字清洗后不变，也就不会和别人撞车）"""
+    return bool(_SCOPE_NAME_RE.match(name or ""))
 
 # 无需鉴权的路径。`/api/health` 是探活探针：它不泄露任何东西，
 # 而插件要用它验证「地址填对了没有」—— 让它也需要密钥，验证流程反而更绕。
@@ -109,16 +134,23 @@ def current_scope() -> str:
     return "" if caller in (_NO_CALLER, LOCAL_CALLER) else caller
 
 
-def _load_keys() -> dict:
-    """解析出 {调用者名: 密钥}。
+def is_admin() -> bool:
+    """当前请求是不是「服务器主人」（本机直连 / 无请求上下文）。
 
-    `API_AUTH_KEYS` 的格式是 `名字:密钥,名字:密钥`。
-    格式不对的条目跳过并告警 —— 一条写错不该让整个服务起不来，
-    但**必须让它可见**，否则表现为"某个人的密钥怎么都不对"。
+    用来把**改动服务器级配置**的能力收在本机：改笔记目录、改定价表。
+    远程具名调用者一律不是 —— 它们各自的数据是隔离的，但服务器配置是所有人的。
+
+    注意与 `is_local_only()` 的区别：那个看的是**服务绑定在哪个地址**
+    （决定"没配密钥时要不要 fail-closed"），这个看的是**当前请求是谁**。
     """
+    return not current_scope()
+
+
+def _parse_keys() -> dict:
+    """解析 `API_AUTH_KEY` + `API_AUTH_KEYS`，**不做名字校验**（见 _validate_names）。"""
     keys = {}
     if config.API_AUTH_KEY:
-        keys["default"] = config.API_AUTH_KEY
+        keys[SHARED_KEY_NAME] = config.API_AUTH_KEY
     for raw in (config.API_AUTH_KEYS or "").split(","):
         item = raw.strip()
         if not item:
@@ -131,8 +163,78 @@ def _load_keys() -> dict:
         if not name or not key:
             logger.warning(f"API_AUTH_KEYS 里有空名字或空密钥，已跳过：{item[:20]}…")
             continue
+        if name == SHARED_KEY_NAME and config.API_AUTH_KEY:
+            # 不拦就会**静默**夺走共享密钥的身份（字典后写覆盖先写），
+            # 表现是"我的那把钥匙突然不管用了"
+            logger.error(f"⛔ API_AUTH_KEYS 里的名字 {name!r} 与内置共享密钥重名，"
+                         f"该条目已忽略，请改名")
+            continue
         keys[name] = key
     return keys
+
+
+def _validate_names(keys: dict) -> dict:
+    """校验名字段，丢掉"清洗后会撞车"的条目。
+
+    ★ 为什么不能只靠清洗：`alice.x` 与 `alice_x` 清洗后都是 `alice_x`，
+    两个不同的人会**静默**共用同一份笔记；超过 32 字符的名字截断后同样会撞。
+    名字是人手写进 .env 的，所以这里以「丢掉 + 报错」为主 ——
+    和"对外监听却没配密钥就一律拒绝"是同一个取舍：配置错了要**立刻可见**，
+    而不是让它悄悄串数据。被丢掉的人表现为 401，一眼能查到来由。
+    """
+    kept, seen = {}, {}
+    for name, key in keys.items():
+        if not scope_name_ok(name):
+            logger.error(f"⛔ API_AUTH_KEYS 的名字 {name!r} 不合法（只允许数字/字母/"
+                         f"下划线/连字符/中文，且 ≤32 字符），该条目已忽略，请改名")
+            continue
+        sanitized = sanitize_scope_name(name)
+        if sanitized in seen:
+            logger.error(f"⛔ API_AUTH_KEYS 里 {seen[sanitized]!r} 与 {name!r} 会落到"
+                         f"同一份数据（都规整为 {sanitized!r}），后者已忽略，请改名")
+            continue
+        seen[sanitized] = name
+        kept[name] = key
+    return kept
+
+
+# (配置签名, 解析结果)。config 变了签名就变，缓存自然失效。
+_keys_cache: tuple = (None, None)
+
+
+def _load_keys() -> dict:
+    """解析并校验出 {调用者名: 密钥}（按配置内容缓存）。
+
+    `API_AUTH_KEYS` 的格式是 `名字:密钥,名字:密钥`。
+    格式不对的条目跳过并告警 —— 一条写错不该让整个服务起不来，
+    但**必须让它可见**，否则表现为"某个人的密钥怎么都不对"。
+
+    缓存有两个理由：① 每个请求都会走到这里，重复解析纯属浪费；
+    ② 校验里的 ERROR 只该在配置变化时喊一次，而不是每个请求喊一次。
+    """
+    global _keys_cache
+    sig = (config.API_AUTH_KEY or "", config.API_AUTH_KEYS or "")
+    if _keys_cache[0] == sig:
+        return _keys_cache[1]
+    keys = _validate_names(_parse_keys())
+    _keys_cache = (sig, keys)
+    return keys
+
+
+def quota_state(caller: str) -> tuple:
+    """返回 `(是否已超额, 今日已用 token)`。
+
+    入口检查（`require_key`）与网关复查（`gateway._check_quota`）共用这一份判断 ——
+    两边各写一遍的话，很容易一边按 caller 算、一边按 scope 算，口径就分叉了。
+
+    限额未开（`API_DAILY_TOKEN_LIMIT=0`）、无调用者、或本机免鉴权那条路 → `(False, 0)`。
+    """
+    limit = config.API_DAILY_TOKEN_LIMIT
+    if limit <= 0 or not caller or caller == LOCAL_CALLER:
+        return (False, 0)
+    from backend.services.llm.cost_service import tokens_used_today
+    used = tokens_used_today(caller)
+    return (used >= limit, used)
 
 
 def is_local_only() -> bool:
@@ -174,7 +276,15 @@ def _reject(request: Request, status: int, message: str) -> JSONResponse:
     """
     client = request.client.host if request.client else "?"
     logger.warning(f"⛔ 拒绝 {request.method} {request.url.path} ← {client}（{status}）")
-    return JSONResponse({"detail": message}, status_code=status)
+    return JSONResponse(
+        {"detail": message}, status_code=status,
+        # ★ 必须手动补 CORS 头。鉴权中间件注册在 CORSMiddleware **之外**，
+        #   被它拒掉的响应不经过 CORS 处理 —— 浏览器于是只看到「网络错误」，
+        #   而不是那句 401/429 的说明文字（正是本模块开头警告过的那类迷惑症状：
+        #   预检放行了，被拒的真请求却没带 CORS 头）。
+        #   正常响应由 CORSMiddleware 补，这里补的是它够不到的那条路。
+        headers={"Access-Control-Allow-Origin": "*"},
+    )
 
 
 def _match_caller(provided: str, keys: dict) -> str:
@@ -183,10 +293,16 @@ def _match_caller(provided: str, keys: dict) -> str:
     逐个比对（而不是先查表）是必须的：字典查找的耗时依赖 key 是否存在，
     会泄漏"某个前缀对不对"。这里用常数时间比较，且**不比提前返回**，
     让所有条目都走一遍。
+
+    ★ 比较前转成 bytes：HTTP 头是按 latin-1 解码的，攻击者塞一个高位字节
+    （如 0xFF）就能得到一个非 ASCII 的 str，而 str 版的 `compare_digest`
+    遇到非 ASCII 会抛 `TypeError` → **一个请求换一条 500 日志**。
+    这不能绕过鉴权（异常发生在比对时，不是通过时），但足以灌满日志。
     """
     matched = _NO_CALLER
+    provided_b = (provided or "").encode()
     for name, key in keys.items():
-        if hmac.compare_digest(provided, key):
+        if hmac.compare_digest(provided_b, key.encode()):
             matched = name
     return matched
 
@@ -232,15 +348,18 @@ async def require_key(request: Request):
 
     # 配额：只对"已经过鉴权的调用者"生效（本机免鉴权那条路不受限，
     # 否则自己调试时会被自己的限额挡住）
-    limit = config.API_DAILY_TOKEN_LIMIT
-    if limit > 0:
-        from backend.services.llm.cost_service import tokens_used_today
-        used = tokens_used_today(caller)
-        if used >= limit:
-            logger.warning(f"📊 {caller} 今日已用 {used:,} token，超过上限 {limit:,}，拒绝")
-            return _reject(request, 429,
-                           f"今日额度已用完（{used:,}/{limit:,} token）。"
-                           f"请明天再试，或联系管理员调整上限。")
+    #
+    # ⚠️ 这里只是**入口检查**，管不住并发也管不住单请求超烧：
+    #    额度用到 99% 时同时发 50 个请求，它们全都在入账**之前**通过了这道检查；
+    #    而每个请求是 Agent 循环（最多 8 轮 × 64K 输入预算），一次能烧几十万 token。
+    #    真正的兜底在 `gateway._check_quota`（每次模型调用前复查）。
+    over, used = quota_state(caller)
+    if over:
+        logger.warning(f"📊 {caller} 今日已用 {used:,} token，超过上限 "
+                       f"{config.API_DAILY_TOKEN_LIMIT:,}，拒绝")
+        return _reject(request, 429,
+                       f"今日额度已用完（{used:,}/{config.API_DAILY_TOKEN_LIMIT:,} token）。"
+                       f"请明天再试，或联系管理员调整上限。")
 
     _current_caller.set(caller)
     return None

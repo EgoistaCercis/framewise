@@ -152,6 +152,37 @@ API_AUTH_KEYS = os.getenv("API_AUTH_KEYS", "")
 #   （占带宽和磁盘，不只是 token），所以宁可就设一个保守的数。
 API_DAILY_TOKEN_LIMIT = int(os.getenv("API_DAILY_TOKEN_LIMIT", "0"))
 
+# 单次上传文件的大小上限（MB）。
+# ★ 上传端点是**唯一**一个请求体完全由调用者控制的入口，而它原来是把整个文件
+#   一把读进内存的 —— 持钥者传一个超大文件就能 OOM；docker-compose 没设
+#   memory limit，被拖垮的是宿主机。现在分块写盘 + 超限即拒（413）。
+# 默认 500MB 的依据：本项目自己的测试视频都在十几 MB 量级，
+# 500MB 足够覆盖几小时的课程录像，同时把"一个请求打死服务"挡在外面。
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "500"))
+
+# 允许服务器**代为访问**的媒体站点（逗号分隔，子域名自动放行）。
+# 见 main._assert_url_allowed：`/api/videos/from_url` 和 `captured_subtitles_url`
+# 都是让服务器去 GET 调用者给的 URL，不设闸的话持钥者可以拿它探测内网服务
+# 或云元数据端点（169.254.169.254 能换到临时凭据）。
+# 产品本来就只支持 B 站和 YouTube，所以白名单不会挡住正常用法；
+# 要支持别的站点在这里加域名即可。
+ALLOWED_MEDIA_HOSTS = [
+    h.strip().lower() for h in os.getenv(
+        "ALLOWED_MEDIA_HOSTS",
+        "bilibili.com,b23.tv,bilibili.tv,youtube.com,youtu.be,youtube-nocookie.com",
+    ).split(",") if h.strip()
+]
+
+# 是否对外暴露 /docs /redoc /openapi.json。
+# ★ 默认按监听地址决定：只监听本机时开着（自己调试方便），
+#   对外监听时关掉 —— 它会把全部 API 结构白送给扫描器。
+# 需要远程看文档时显式设 API_DOCS=1。
+_docs_env = os.getenv("API_DOCS", "")
+if _docs_env == "":
+    API_DOCS = HOST in ("127.0.0.1", "localhost", "::1")
+else:
+    API_DOCS = _docs_env.strip().lower() in ("1", "true", "yes", "on")
+
 # ASR 模式: "local" = faster-whisper, "api" = 硅基流动 SenseVoice
 ASR_MODE = os.getenv("ASR_MODE", "api")
 

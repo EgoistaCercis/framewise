@@ -63,18 +63,21 @@ def note_dir() -> str:
 
     分区名取自 `.env` 里 `API_AUTH_KEYS` 的 `名字` 部分 —— 那是人手写的，
     所以仍然要过滤一遍：一个手滑写成 `../x` 就能穿越到笔记目录之外。
-    允许的字符：数字、字母、下划线、连字符、CJK（中文名字直接可用）。
+
+    ★ 清洗用 `auth.sanitize_scope_name`（与名字**校验**共用同一份字符类）——
+    在这里另写一份正则的话，很容易出现"校验放行了、清洗后却撞到别人"的缝。
+    注意清洗本身**不报错**：`alice.x` 和 `alice_x` 都会变成 `alice_x`。
+    所以不合法的名字在 `auth._validate_names` 里就被挡掉了（启动时报错），
+    这里的清洗只是纵深防御。
     """
     import os
-    import re
     from backend.config import NOTE_DIR
-    from backend.services.auth import current_scope
+    from backend.services.auth import current_scope, sanitize_scope_name
 
     scope = current_scope()
     if not scope:
         return NOTE_DIR
-    safe = re.sub(r"[^0-9A-Za-z_一-鿿-]", "_", scope)[:32] or "anonymous"
-    return os.path.join(NOTE_DIR, _USERS_SUBDIR, safe)
+    return os.path.join(NOTE_DIR, _USERS_SUBDIR, sanitize_scope_name(scope) or "anonymous")
 
 
 def _safe_note_path(filename: str) -> str:

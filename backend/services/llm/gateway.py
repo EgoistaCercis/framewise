@@ -200,7 +200,11 @@ async def _with_retry(fn, *, retries: int = MAX_RETRIES, desc: str = ""):
     - 重试：网络错误(APITimeoutError/APIConnectionError)、429、5xx(500/502/503/504)
     - 不重试：400/401/404 等客户端错误（重试无意义）
     重试耗尽后抛出最后一个异常。
+
+    ★ 也是**配额复查点**：这是全仓库所有模型调用的必经之路
+    （chat / chat_with_tools / 两个 stream / vision / embedding / ASR 全都走它）。
     """
+    _check_quota()          # 配额熔断，见 _check_quota 的说明
     last = None
     for attempt in range(retries + 1):
         try:
@@ -258,6 +262,27 @@ def _stream_opts() -> dict:
     return {"stream_options": {"include_usage": True}} if _stream_usage_supported else {}
 
 
+def _estimate_usage(msgs: list, output_text: str) -> dict:
+    """按字符粗估 token，供"厂商不回 usage"时兜底记账。
+
+    口径与仓库其他地方一致：中文约 1 token / 1.5 字。
+
+    ★ 为什么宁可粗估也不能不记：`stream_options` 被厂商拒掉后永久降级，
+    此后**所有流式调用**（产品的默认交互路径）都不再有 usage —— 也就是
+    限额对最主要的烧 token 路径完全隐形。粗估的数字不精确，但让
+    `quota_state` 有数可依，限额不至于变成摆设。
+    """
+    def _est(s) -> int:
+        if isinstance(s, list):          # 多模态 content 是分段列表
+            s = "".join(str(p.get("text", "")) if isinstance(p, dict) else str(p) for p in s)
+        return int(len(str(s or "")) / 1.5)
+
+    prompt = sum(_est(m.get("content")) for m in msgs)
+    completion = _est(output_text)
+    return {"prompt_tokens": prompt, "completion_tokens": completion,
+            "total_tokens": prompt + completion}
+
+
 def _degrade_stream_usage(e) -> None:
     global _stream_usage_supported
     if _stream_usage_supported:
@@ -274,6 +299,40 @@ class GatewayProtocolError(RuntimeError):
     带的是**已经写好的可读信息**，translate_error 必须原样透传、
     不能再包一层 —— 否则精心写的提示会被前缀和 [:100] 截断糊掉。
     """
+
+
+class QuotaExceeded(GatewayProtocolError):
+    """调用者今日 token 额度已用完。
+
+    继承 `GatewayProtocolError` 是为了让 `translate_error` **原样透传**这段
+    已经写好的中文提示；否则会被 "…调用失败：…" 再包一层并截断。
+    """
+
+
+def _check_quota() -> None:
+    """每次真正调用模型前复查配额（超过则抛 QuotaExceeded）。
+
+    ★ 为什么不能只在请求入口查一次（`auth.require_key`）：那里挡不住两种超烧 ——
+
+    ① **并发**：额度用到 99% 时同时发 50 个请求，它们**全部**在入账之前
+       通过了入口检查（每次检查读的都是同一个旧值）；
+    ② **单请求**：一个请求就是一个 Agent 循环（最多 8 轮 × 64K 输入预算），
+       从 99% 处起跑也能再烧掉远超剩余额度的一大截。
+
+    把复查放到网关（所有模型调用的必经之路）之后，超额最多让**一次**模型调用
+    得逞，之后立刻断掉 —— 50 个并发请求各自也只能再走一步。
+    本机/无请求上下文（评测脚本）不受限，见 `auth.quota_state`。
+    """
+    from backend.services.auth import current_caller, quota_state
+    over, used = quota_state(current_caller())
+    if not over:
+        return
+    limit = config.API_DAILY_TOKEN_LIMIT
+    logger.warning(f"📊 配额熔断：{current_caller()} 今日已用 {used:,} token"
+                   f"（上限 {limit:,}），已中断模型调用")
+    raise QuotaExceeded(
+        f"今日 token 额度已用完（{used:,}/{limit:,}），本次回答中断。"
+        f"请明天再试，或联系管理员调整上限。")
 
 
 def _expand_multimodal(msgs: list[dict]) -> list[dict]:
@@ -355,7 +414,10 @@ def _record(cfg: dict, call_type: str, *, input_tokens: int = 0,
             video_id=video_id, caller=current_caller(),
         )
     except Exception as e:
-        logger.warning(f"[Cost] 用量记账失败（不影响本次调用）: {e}")
+        # ★ ERROR 而不是 WARNING：记账挂掉不只是"报表少一行"——
+        #   `auth.quota_state` 和 `gateway._check_quota` 都是读这张表来判断
+        #   有没有超额的，写不进去等于**限额静默失效**。这必须是显眼的。
+        logger.error(f"[Cost] 用量记账失败（限额会因此失效，本次调用仍继续）: {e}")
 
 
 def _record_usage(cfg: dict, call_type: str, usage: dict, video_id: str = None) -> None:
@@ -542,6 +604,7 @@ async def chat_stream(messages: list[dict], system_prompt: str = None,
             _degrade_stream_usage(e)
             stream = await _with_retry(_mk({}), desc="chat_stream")
         stream_usage = {}
+        text_parts = []
         async for chunk in stream:
             # 末块 choices 为空、只带 usage —— 必须在 continue 之前取
             if getattr(chunk, "usage", None):
@@ -550,7 +613,13 @@ async def chat_stream(messages: list[dict], system_prompt: str = None,
                 continue
             delta = chunk.choices[0].delta
             if delta and delta.content:
+                text_parts.append(delta.content)
                 yield delta.content
+        if not stream_usage:
+            # 降级后厂商不回 usage → 退化成按字符估算（见 _estimate_usage）。
+            # 不记等于限额对**产品主路径**完全隐形。
+            stream_usage = _estimate_usage(msgs, "".join(text_parts))
+            logger.debug("[Cost] 流式响应无 usage，已按字符估算记账")
         _record_usage(cfg, "chat", stream_usage, video_id)
     except Exception as e:
         raise RuntimeError(translate_error(e, cfg["provider"])) from e
@@ -620,6 +689,10 @@ async def chat_with_tools_stream(messages: list[dict], system_prompt: str = None
             {"id": e["id"], "name": e["name"], "arguments": e["arguments"]}
             for _, e in sorted(tool_calls.items())
         ]
+        if not stream_usage:
+            # 同上：降级后按字符估算，别让主路径完全不入账
+            stream_usage = _estimate_usage(msgs, "".join(content_parts))
+            logger.debug("[Cost] 流式响应无 usage，已按字符估算记账")
         _record_usage(cfg, "chat", stream_usage, video_id)
         yield {"type": "done", "content": "".join(content_parts), "tool_calls": tc_list, "usage": stream_usage}
     except Exception as e:

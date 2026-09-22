@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from backend.config import (
     UPLOAD_DIR, SUBTITLE_DIR, EMBEDDING_DIR, FRAME_DIR,
     HOST, PORT, DATA_DIR, DEEPSEEK_MODEL, SILICONFLOW_EMBEDDING_MODEL, WHISPER_MODEL_SIZE,
-    ASR_MODE, DASHSCOPE_API_KEY,
+    ASR_MODE, DASHSCOPE_API_KEY, API_DOCS,
 )
 
 # 确保目录存在
@@ -27,7 +27,15 @@ for d in [UPLOAD_DIR, SUBTITLE_DIR, EMBEDDING_DIR, FRAME_DIR]:
 from loguru import logger
 from backend.services.agent.memory_agent import update_memory_async
 
-app = FastAPI(title="帧知 - 视频学习Agent", version="0.1.0")
+# /docs /redoc /openapi.json 是否暴露，按监听地址决定（见 config.API_DOCS）：
+# 对外监听时关掉 —— 开着等于把全部 API 结构白送给扫描器。
+# 想远程看文档就设 API_DOCS=1。
+app = FastAPI(
+    title="帧知 - 视频学习Agent", version="0.1.0",
+    docs_url="/docs" if API_DOCS else None,
+    redoc_url="/redoc" if API_DOCS else None,
+    openapi_url="/openapi.json" if API_DOCS else None,
+)
 
 
 @app.on_event("startup")
@@ -213,11 +221,21 @@ async def get_note_dir():
 
     `editable` 告诉前端能不能改这个目录：只有本机可以（见 set_note_dir 的说明）。
     远程调用者前端据此把输入框换成"导出到本地"，而不是留一个点了必然 403 的按钮。
+
+    ★ 远程调用者只拿到**相对路径**（`_users/<名字>`），不返回服务器上的绝对布局 ——
+    前端只需要它当显示文本，而绝对路径会暴露部署结构（`/app/data/notes`）。
     """
-    from backend.services.agent.tools import note_dir
-    from backend.services.auth import current_scope
+    from backend.services.agent.tools import note_dir, _USERS_SUBDIR
+    from backend.services.auth import current_scope, is_admin
+    from backend.config import NOTE_DIR as _root
     scope = current_scope()
-    return {"note_dir": note_dir(), "scope": scope, "editable": not scope}
+    path = note_dir()
+    if not is_admin():
+        try:
+            path = os.path.relpath(path, _root)          # → `_users/<名字>`
+        except ValueError:
+            path = f"{_USERS_SUBDIR}/{scope}"            # 跨盘符等极端情况
+    return {"note_dir": path, "scope": scope, "editable": not scope}
 
 
 class NoteDirUpdate(BaseModel):
@@ -234,10 +252,10 @@ async def set_note_dir(req: NoteDirUpdate):
     所以远程调用者一律拒绝 —— 部署在服务器上时改 `.env` 里的 NOTE_DIR 并重启。
     """
     from backend import config as _c
-    from backend.services.auth import current_scope
+    from backend.services.auth import is_admin
     import os as _os
 
-    if current_scope():
+    if not is_admin():
         raise HTTPException(403, "笔记目录只能在服务器本机设置（改 .env 的 NOTE_DIR 后重启）")
 
     path = req.note_dir.strip()
@@ -335,6 +353,38 @@ async def clear_memory():
 # 用量统计 API
 # ═══════════════════════════════════════════
 
+def _assert_url_allowed(url: str) -> None:
+    """只允许服务器去访问白名单内的站点，否则 400。
+
+    ★ 为什么要有这道闸：`/api/videos/from_url` 与 `captured_subtitles_url`
+    都是让**服务器**去 GET 调用者给的 URL（后者还 `follow_redirects=True`）。
+    持钥者可以借此探测内网服务，或打云元数据端点
+    （`169.254.169.254` 能换到临时凭据）。这是典型的 SSRF。
+
+    用**域名白名单**而不是"解析 IP 再判断私网"：后者在"我们判断"与
+    "实际发起连接"之间存在 TOCTOU 窗口（DNS rebinding 可绕过），而且
+    yt-dlp 是自己发请求的，我们拦不住它最终连哪个 IP。域名白名单没有这个缝。
+    """
+    from urllib.parse import urlparse
+    from backend.config import ALLOWED_MEDIA_HOSTS
+
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        raise HTTPException(400, "链接格式不正确")
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme not in ("http", "https") or not host:
+        raise HTTPException(400, "只支持 http/https 的视频链接")
+    for allowed in ALLOWED_MEDIA_HOSTS:
+        # 用 ".+域名" 而不是 endswith(域名)：后者会把 bilibili.com.evil.com 放进来
+        if host == allowed or host.endswith("." + allowed):
+            return
+    logger.warning(f"⛔ 拒绝非白名单站点：{host}")
+    raise HTTPException(
+        400, f"暂不支持该站点（{host}）。本服务只代访问 B 站 / YouTube；"
+             f"要加站点请在后端 .env 的 ALLOWED_MEDIA_HOSTS 里配置。")
+
+
 @app.post("/api/videos/{video_id}/captured_subtitles_url")
 async def captured_subtitles_url(video_id: str, req: dict):
     """接收浏览器拦截的B站字幕URL：下载并缓存字幕，等用户手动触发索引。
@@ -360,6 +410,7 @@ async def captured_subtitles_url(video_id: str, req: dict):
     if not url:
         raise HTTPException(400, "字幕URL为空")
     if url.startswith("//"): url = "https:" + url
+    _assert_url_allowed(url)      # SSRF 闸：服务器只代访问白名单站点
 
     # B站 ai_subtitle 的 auth_key 签名绑定具体视频页面，Referer 必须是该页面否则 403
     referer = req.get("referer", "") or "https://www.bilibili.com/"
@@ -553,10 +604,18 @@ async def usage_by_caller():
 
     与 by_video 的区别是归因维度：by_video 回答"哪个视频贵"，
     by_caller 回答"谁在用、用了多少"——给多人发密钥后靠它看用量。
+
+    ★ 远程调用者**只看得到自己那一行**：全量列表等于把"这个服务上有哪些人、
+    各用了多少"发给每个人（谁叫什么名字都在里面）。管理员（本机）看全量。
     """
     from backend.services.llm.cost_service import get_stats_by_caller
     from backend.config import API_DAILY_TOKEN_LIMIT
-    return {"daily_limit": API_DAILY_TOKEN_LIMIT, "callers": get_stats_by_caller()}
+    from backend.services.auth import current_scope
+    rows = get_stats_by_caller()
+    me = current_scope()
+    if me:
+        rows = [r for r in rows if r.get("who") == me]
+    return {"daily_limit": API_DAILY_TOKEN_LIMIT, "callers": rows}
 
 
 @app.get("/api/usage/video/{video_id}")
@@ -568,9 +627,15 @@ async def usage_of_video(video_id: str):
 
 @app.get("/api/usage/history")
 async def usage_history(limit: int = 30):
-    """最近调用记录"""
+    """最近调用记录（远程调用者只看自己的）"""
     from backend.services.llm.cost_service import get_history
-    return get_history(limit)
+    from backend.services.auth import current_scope
+    rows = get_history(limit)
+    me = current_scope()
+    if me:
+        # caller 列直接写着人名，全量返回等于把别人的活动记录发给每个人
+        rows = [r for r in rows if (r.get("caller") or "") == me]
+    return rows
 
 
 # ═══════════════════════════════════════════════════════
@@ -596,8 +661,15 @@ async def pricing_list():
 
 @app.post("/api/pricing")
 async def pricing_update(req: PricingUpdate):
-    """更新某模型为最新价（旧版本置为 inactive）"""
+    """更新某模型为最新价（旧版本置为 inactive）。
+
+    ★ 只允许本机调用：定价表是**全局**的，任何人改都会影响所有人的成本核算
+    （写错了会让所有人的用量报表数字失真，且很难联想到是谁改的）。
+    """
     from backend.services.llm.pricing_service import update_price
+    from backend.services.auth import is_admin
+    if not is_admin():
+        raise HTTPException(403, "定价表只能在服务器本机修改")
     pid = update_price(
         req.model, req.input_ppm, req.output_ppm,
         cache_ppm=req.cache_ppm, reasoning_ppm=req.reasoning_ppm,
@@ -610,6 +682,9 @@ async def pricing_update(req: PricingUpdate):
 async def pricing_refresh(model: str = ""):
     """自动拉取最新价（预留接口，默认未接入）"""
     from backend.services.llm.pricing_service import fetch_latest_price
+    from backend.services.auth import is_admin
+    if not is_admin():
+        raise HTTPException(403, "定价表只能在服务器本机修改")
     if not model:
         return {"status": "not_implemented", "message": "请指定 model；自动拉价未接入"}
     price = fetch_latest_price(model)
@@ -629,6 +704,7 @@ async def process_url(background_tasks: BackgroundTasks, req: dict):
     url = req.get("url", "").strip()
     if not url:
         raise HTTPException(400, "请提供视频链接")
+    _assert_url_allowed(url)      # SSRF 闸：服务器只代访问白名单站点
 
     # URL标准化：提取规范ID，去除跟踪参数
     canonical_id = _canonical_video_id(url)
@@ -716,16 +792,41 @@ async def process_url(background_tasks: BackgroundTasks, req: dict):
 
 @app.post("/api/videos/upload")
 async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    """上传视频文件，启动后台ASR处理"""
+    """上传视频文件，启动后台ASR处理。
+
+    ★ 有大小上限且**分块写盘**。原来是 `content = await file.read()`
+    一把读进内存 —— 持钥者上传一个超大文件就能 OOM，而容器没设 memory limit，
+    拖垮的是宿主机。分块写还有个附带好处：中途超限时已经写出去的部分能删干净。
+    """
+    from backend import config as _c
     # 生成唯一ID并保存文件
     video_id = uuid.uuid4().hex[:12]
     ext = Path(file.filename).suffix or ".mp4"
     safe_name = f"{video_id}{ext}"
     video_path = os.path.join(UPLOAD_DIR, safe_name)
 
-    content = await file.read()
-    with open(video_path, "wb") as f:
-        f.write(content)
+    limit = _c.MAX_UPLOAD_MB * 1024 * 1024
+    written = 0
+    try:
+        with open(video_path, "wb") as f:
+            while True:
+                chunk = await file.read(1024 * 1024)   # 1MB 一块
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > limit:
+                    raise HTTPException(
+                        413, f"文件超过上限 {_c.MAX_UPLOAD_MB}MB"
+                             f"（可在 .env 调整 MAX_UPLOAD_MB）")
+                f.write(chunk)
+    except HTTPException:
+        # 半截文件不能留下：它会被当成本次上传的"视频"留在磁盘上
+        if os.path.exists(video_path):
+            os.remove(video_path)
+        logger.warning(f"上传被拒（超过 {_c.MAX_UPLOAD_MB}MB）：{file.filename}")
+        raise
+    if not written:
+        raise HTTPException(400, "上传内容为空")
 
     # 初始化状态
     video_states[video_id] = {

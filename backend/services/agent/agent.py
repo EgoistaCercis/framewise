@@ -63,18 +63,29 @@ def _log_trace(session_id: str, video_id: str, step: int, event_type: str,
 # 工具执行前请求用户批准：run_stream 推送 confirm 事件并阻塞等待，
 # 前端调 /api/approve 接口唤醒。
 #
-# 已知限制：confirm_id 是全局命名空间，任何拿到 id 的客户端都能 approve。
-# 单用户应用可接受；多用户前必须绑定会话（session_id 已存进 entry，待接入校验）。
-_pending_confirmations: dict = {}  # confirm_id -> {"event", "approved", "message", "session_id"}
+# **绑定发起者**：原来 confirm_id 是全局命名空间，任何拿到 id 的客户端都能
+# approve —— 属于跨用户的越权批准。现在记录发起时的 scope，批准时校验必须
+# 是同一个人；`_pending_confirmations` 的键也带上了 scope，避免撞 id。
+_pending_confirmations: dict = {}  # (scope, confirm_id) -> {"event", "approved", "message", "session_id"}
+
+
+def _conf_key(confirm_id: str, scope: str = None) -> tuple:
+    """待确认条目的键：`(scope, confirm_id)`。
+
+    `scope` 传 None 表示"取当前请求的"（发起与批准两侧都用默认值即可）。
+    """
+    if scope is None:
+        from backend.services.auth import current_scope
+        scope = current_scope()
+    return (scope, confirm_id)
 
 
 def _new_confirmation(message: str, session_id: str = None) -> str:
-    """创建一条待确认请求，返回 confirm_id。
-
-    session_id 一并存下，供将来做会话绑定（见文末说明）。
-    """
-    confirm_id = uuid.uuid4().hex[:12]
-    _pending_confirmations[confirm_id] = {
+    """创建一条待确认请求，返回 confirm_id。"""
+    # 用完整 uuid4().hex（128 bit）而不是原来的 [:12]（48 bit）：
+    # 这个 id 现在是"谁能批准"的唯一凭据，随机空间太小给了猜中的可能。
+    confirm_id = uuid.uuid4().hex
+    _pending_confirmations[_conf_key(confirm_id)] = {
         "event": asyncio.Event(),
         "approved": False,
         "message": message,
@@ -93,7 +104,7 @@ async def _wait_confirmation(confirm_id: str, timeout: float = 120.0) -> str:
     **清理**：原来只在 `_resolve_confirmation` 里 pop，超时的条目永远留在字典里
     （只进不出，长期运行内存泄漏）。这里在 finally 里统一清理，两条路径都覆盖。
     """
-    entry = _pending_confirmations.get(confirm_id)
+    entry = _pending_confirmations.get(_conf_key(confirm_id))
     if not entry:
         return "denied"
     try:
@@ -102,18 +113,23 @@ async def _wait_confirmation(confirm_id: str, timeout: float = 120.0) -> str:
     except asyncio.TimeoutError:
         return "timeout"
     finally:
-        _pending_confirmations.pop(confirm_id, None)
+        _pending_confirmations.pop(_conf_key(confirm_id), None)
 
 
 def _resolve_confirmation(confirm_id: str, approved: bool) -> bool:
-    """由 /api/approve 调用，设置确认结果并唤醒等待"""
-    entry = _pending_confirmations.get(confirm_id)
+    """由 /api/approve 调用，设置确认结果并唤醒等待。
+
+    键里带发起者的 scope：**别人的 confirm_id 批不了**（返回 False → 404）。
+    在 120 秒有效期 + 随机 id 之上再补一道，是因为"批准"是放行高危操作的凭据，
+    不该靠"猜不到 id"来保证安全。
+    """
+    entry = _pending_confirmations.get(_conf_key(confirm_id))
     if not entry:
         return False
     entry["approved"] = approved
     entry["event"].set()
     # 这里 pop 是幂等的兜底：等待方持有 entry 引用，pop 之后仍能读到 approved。
-    _pending_confirmations.pop(confirm_id, None)
+    _pending_confirmations.pop(_conf_key(confirm_id), None)
     return True
 
 
