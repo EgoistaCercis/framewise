@@ -558,7 +558,17 @@
             apiFetch("/api/videos/" + videoId + "/captured_subtitles_url", {
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ subtitle_url: url, referer: referer || cleanUrl(location.href) }),
-            }).then(function () {
+            }).then(function (r) {
+                // ★ 必须显式看 r.ok：fetch 对 HTTP 错误码**不会 reject**，
+                //   所以 400 原本也走"成功"这条分支 —— 界面显示"字幕已缓存"、
+                //   服务器上其实什么都没存，用户点 🔄 毫无反应，前端只剩一条
+                //   console 的 "Failed to load resource: 400"。
+                //   实测踩过：后端 SSRF 白名单漏了字幕 CDN 域名，整条链路 400，
+                //   而前端一路当作成功，卡死在"正在处理字幕"。
+                if (!r.ok) {
+                    return r.json().catch(function () { return {}; })
+                        .then(function (d) { throw new Error(d.detail || ("HTTP " + r.status)); });
+                }
                 _uploadingSub = false;
                 // 无条件置位（不能只靠 subtitlesState —— 若已在问答中就跳过它了）
                 _hasSub = true;
@@ -569,10 +579,14 @@
                 //   用户按要求点了字幕、服务器也存好了，界面却毫无变化（实测踩过）。
                 //   已经在问答中（_fwReady）就不要动消息区，免得把聊天记录冲掉。
                 if (!window._fwReady) { subtitlesState(); }
-            }).catch(function () {
+            }).catch(function (e) {
                 // 上传失败 → 退出中间态，回到「未找到字幕」面板（那里有语音识别兜底）
                 _uploadingSub = false;
                 if (!window._fwReady) { noSubtitlesState(); }
+                // ★ 必须把原因显示出来。以前这里只吞掉，用户看到的是"一直卡在
+                //   处理字幕"，没有任何线索。放在 noSubtitlesState() **之后**，
+                //   否则会被它 innerHTML = ... 冲掉。
+                addMsg("error", "字幕上传失败：" + ((e && e.message) || e));
             });
         })();
     }

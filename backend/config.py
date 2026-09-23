@@ -166,10 +166,20 @@ MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "500"))
 # 或云元数据端点（169.254.169.254 能换到临时凭据）。
 # 产品本来就只支持 B 站和 YouTube，所以白名单不会挡住正常用法；
 # 要支持别的站点在这里加域名即可。
+#
+# ★ `hdslb.com` 必须在里面 —— B 站的**字幕 JSON 就在这个 CDN 上**
+#   （`aisubtitle.hdslb.com`，插件的 manifest 也为此申请了 `*://*.hdslb.com/*`）。
+#   第一版漏了它，结果整个"字幕拦截 → 上传"链路全 400、插件卡在"正在处理字幕"。
+#   收录白名单时**要照着真实请求的域名来填，不能只凭"看起来像"** ——
+#   当时测试用的是 `api.bilibili.com`（确实该放行），但真实链路走的是 hdslb。
+#
+# ⚠️ 这份名单是"漏一个就静默弄坏一个功能"的开关（只会在日志里留一条
+#   ⛔ 拒绝非白名单站点）。启动时会把它打出来，改完记得核对。
 ALLOWED_MEDIA_HOSTS = [
     h.strip().lower() for h in os.getenv(
         "ALLOWED_MEDIA_HOSTS",
-        "bilibili.com,b23.tv,bilibili.tv,youtube.com,youtu.be,youtube-nocookie.com",
+        "bilibili.com,b23.tv,bilibili.tv,hdslb.com,"
+        "youtube.com,youtu.be,youtube-nocookie.com",
     ).split(",") if h.strip()
 ]
 

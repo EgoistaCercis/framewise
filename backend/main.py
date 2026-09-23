@@ -51,6 +51,12 @@ async def startup_event():
     from backend.services import auth
     auth.startup_check()
 
+    # SSRF 白名单也打出来：这份名单**漏一个域名就静默坏一个功能**
+    # （曾经漏了 hdslb.com，整条"字幕拦截→上传"链路全 400，前端却只表现为
+    #  "一直卡在处理字幕"）。打出来是为了让"该有的域名在不在"一眼可见。
+    from backend.config import ALLOWED_MEDIA_HOSTS
+    logger.info(f"🌐 服务器可代访问的站点：{'、'.join(ALLOWED_MEDIA_HOSTS)}")
+
     # 恢复启动时中断的"处理中"状态 → 标记为 error
     import asyncio
     recovered = 0
