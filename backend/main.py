@@ -763,22 +763,38 @@ async def process_url(background_tasks: BackgroundTasks, req: dict):
         _save_states()
         return {"video_id": video_id, "status": "ready", "title": url}
 
-    # 获取视频信息
+    # 获取视频信息 —— **失败不致命**。
+    #
+    # ★ 这里原来是 `except: raise HTTPException(400, f"无法获取视频信息: {e}")"`，
+    #   后果很重：yt-dlp 一旦取不到信息，**服务器就连视频都创建不出来**，
+    #   整个产品在服务器上等于废掉。
+    #
+    #   而它拿的 title / duration / embed_url 全是**展示用**的元信息，
+    #   真正处理视频的两条路都不依赖它：
+    #     ① 浏览器拦截字幕 → 上传 → 点 🔄 建索引：**完全不碰 yt-dlp**
+    #        （字幕 JSON 从 hdslb CDN 直接下）
+    #     ② ASR：要 yt-dlp 下音频，但那是用户显式触发的另一条路，失败会另报
+    #
+    #   实测踩过：服务器的 yt-dlp 取不到 B 站信息（云机房 IP 容易被风控），
+    #   于是"什么都不了"，而字幕那条路明明是好的。
     try:
         info = get_video_info(url)
     except Exception as e:
-        raise HTTPException(400, f"无法获取视频信息: {str(e)}")
+        logger.warning(f"[{video_id}] 取视频信息失败，改用占位信息继续"
+                       f"（不影响浏览器字幕那条路）：{type(e).__name__}: {e}")
+        info = {"title": "", "duration": 0, "embed_url": url}
+    title = info.get("title") or f"未命名视频（{video_id}）"
 
     # 初始化状态
     video_states[video_id] = {
         "status": "processing",
         "video_path": None,  # URL模式没有本地视频
         "video_hash": None,
-        "original_name": info["title"],
+        "original_name": title,
         "subtitles": None,
         "chunks": None,
         "url": url,
-        "embed_url": info.get("embed_url", url),
+        "embed_url": info.get("embed_url") or url,
         "duration": info.get("duration", 0),
         "is_url_mode": True,
     }
@@ -787,12 +803,12 @@ async def process_url(background_tasks: BackgroundTasks, req: dict):
     background_tasks.add_task(_process_url_task, video_id, url)
     _save_states()
 
-    logger.info(f"URL video processing: {video_id} ({info['title']})")
+    logger.info(f"URL video processing: {video_id} ({title})")
     return {
         "video_id": video_id,
         "status": "processing",
-        "title": info["title"],
-        "duration": info["duration"],
+        "title": title,
+        "duration": info.get("duration", 0),
     }
 
 
