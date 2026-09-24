@@ -11,6 +11,7 @@ import subprocess
 from pathlib import Path
 
 from backend.config import FFMPEG_PATH, DATA_DIR, ASR_MODE
+from backend import config
 from backend.services.media.cache_service import frame_cache_path, frame_cache_exists
 
 AUDIO_DIR = os.path.join(DATA_DIR, "audio")
@@ -20,6 +21,56 @@ _HTTP_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Referer": "https://www.bilibili.com/",
 }
+
+# ── B 站 Cookie（风控需要）───────────────────────────────
+#
+# ★ 为什么必须有：B 站的风控对**不带 Cookie 的请求**会直接回 HTTP 412
+#   （Precondition Failed）。家宽 IP 侥幸能过，**机房 IP 必挂** ——
+#   实测：同一份代码在本机正常，在腾讯云容器里报
+#   `[BiliBili] Unable to download webpage: HTTP Error 412`。
+#
+#   `buvid3` 是"设备指纹"，`/x/frontend/finger/spi` 这个接口**不需要登录**
+#   就能拿到，所以默认自动取、无需任何配置。
+#   要登录态（部分视频、更高清晰度、以及被风控更严的接口）再在 .env 里
+#   配 `BILIBILI_COOKIE`，它优先。
+_buvid3_cache = None
+
+
+def _bili_cookie() -> str:
+    """B 站请求要带的 Cookie 串。"""
+    global _buvid3_cache
+    if config.BILIBILI_COOKIE:
+        return config.BILIBILI_COOKIE.strip()
+    if _buvid3_cache is None:
+        try:
+            import httpx
+            r = httpx.get("https://api.bilibili.com/x/frontend/finger/spi",
+                          timeout=10, headers=dict(_HTTP_HEADERS))
+            _buvid3_cache = (r.json().get("data") or {}).get("b_3") or ""
+            if _buvid3_cache:
+                logger.info("已自动获取 B 站 buvid3（风控需要）")
+            else:
+                logger.warning("B 站 finger/spi 没返回 b_3，请求可能被风控 412")
+        except Exception as e:
+            # 失败不致命：家宽 IP 不带 Cookie 也能过，只是机房 IP 会 412
+            logger.warning(f"获取 B 站 buvid3 失败（机房 IP 下会 412）：{e}")
+            _buvid3_cache = ""
+    return f"buvid3={_buvid3_cache}" if _buvid3_cache else ""
+
+
+def _headers(extra: dict = None) -> dict:
+    """B 站请求头（含 Cookie）。所有发往 B 站的请求都该用它。
+
+    单独抽出来是因为**头必须一致**：漏掉 Cookie 的那个请求就是被 412 的那个，
+    而 412 只在机房 IP 上出现，本地开发完全看不出来。
+    """
+    h = dict(_HTTP_HEADERS)
+    ck = _bili_cookie()
+    if ck:
+        h["Cookie"] = ck
+    if extra:
+        h.update(extra)
+    return h
 
 
 def get_video_info(url: str) -> dict:
@@ -34,7 +85,7 @@ def get_video_info(url: str) -> dict:
         "quiet": True,
         "no_warnings": True,
         "force_ipv4": True,
-        "http_headers": _HTTP_HEADERS,
+        "http_headers": _headers(),
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -58,7 +109,7 @@ def _extract_bilibili_subtitles_api(bvid: str, p: int = 1) -> list[dict] | None:
         # Step 1: 获取视频 cid
         info_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
         r = httpx.get(info_url, timeout=15,
-                      headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.bilibili.com/"})
+                      headers=_headers())
         r.raise_for_status()
         data = r.json()["data"]
 
@@ -69,7 +120,7 @@ def _extract_bilibili_subtitles_api(bvid: str, p: int = 1) -> list[dict] | None:
         # Step 2: 获取字幕列表
         sub_url = f"https://api.bilibili.com/x/player/v2?bvid={bvid}&cid={cid}"
         r = httpx.get(sub_url, timeout=15,
-                      headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.bilibili.com/"})
+                      headers=_headers())
         r.raise_for_status()
         sub_data = r.json()["data"].get("subtitle", {}).get("subtitles", [])
 
@@ -80,11 +131,10 @@ def _extract_bilibili_subtitles_api(bvid: str, p: int = 1) -> list[dict] | None:
         sub_info = next((s for s in sub_data if "zh" in s.get("lan_doc", "").lower()), sub_data[0])
         sub_url = "https:" + sub_info["subtitle_url"] if sub_info["subtitle_url"].startswith("//") else sub_info["subtitle_url"]
 
-        r = httpx.get(sub_url, timeout=15, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36",
+        r = httpx.get(sub_url, timeout=15, headers=_headers({
             "Referer": f"https://www.bilibili.com/video/{bvid}",
             "Origin": "https://www.bilibili.com",
-        })
+        }))
         r.raise_for_status()
         body = r.json()["body"]
 
@@ -126,7 +176,7 @@ def extract_subtitles(url: str) -> list[dict] | None:
         "quiet": True,
         "no_warnings": True,
         "force_ipv4": True,
-        "http_headers": _HTTP_HEADERS,
+        "http_headers": _headers(),
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -181,10 +231,7 @@ def get_audio_stream_url(url: str) -> str | None:
         "quiet": True,
         "no_warnings": True,
         "force_ipv4": True,
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://www.bilibili.com/",
-        },
+        "http_headers": _headers(),
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -218,10 +265,7 @@ def download_audio(url: str, video_id: str) -> str:
         "retries": 5,
         "socket_timeout": 30,
         "force_ipv4": True,
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://www.bilibili.com/",
-        },
+        "http_headers": _headers(),
     }
     # 不下载完整视频，只下原始音频流
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -322,10 +366,7 @@ def _get_stream_url(url: str) -> str:
         "quiet": True,
         "no_warnings": True,
         "force_ipv4": True,
-        "http_headers": {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://www.bilibili.com/",
-        },
+        "http_headers": _headers(),
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)

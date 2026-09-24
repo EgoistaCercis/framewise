@@ -114,6 +114,17 @@ ASR_MODEL_ASR = os.getenv("ASR_MODEL", "FunAudioLLM/SenseVoiceSmall")
 ASR_URL_PROVIDER = os.getenv("ASR_URL_PROVIDER", "dashscope")
 ASR_URL_API_KEY = os.getenv("ASR_URL_API_KEY", "")
 
+# B 站 Cookie（可选，但**部署到机房服务器时常常是必需的**）。
+#
+# ★ 不配也能跑：代码会自动调 `/x/frontend/finger/spi` 取一个 `buvid3`
+#   （设备指纹，无需登录）。但 B 站对**机房 IP** 的风控更严，
+#   只带 buvid3 有时仍返回 412，这时贴一条登录后的完整 Cookie 最稳。
+#
+# 取值：浏览器打开 bilibili.com → F12 → Network → 任一请求 →
+#       复制请求头里的整条 Cookie（至少要有 SESSDATA 和 buvid3）。
+# ⚠️ Cookie 等同账号凭据：只填在自己的 .env 里，别提交、别外发。
+BILIBILI_COOKIE = os.getenv("BILIBILI_COOKIE", "")
+
 # 向后兼容旧变量名
 DEEPSEEK_API_KEY = LLM_API_KEY
 DEEPSEEK_BASE_URL = os.path.dirname(LLM_ENDPOINT.rstrip("/v1/chat/completions"))
