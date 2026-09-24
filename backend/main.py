@@ -391,6 +391,63 @@ def _assert_url_allowed(url: str) -> None:
              f"要加站点请在后端 .env 的 ALLOWED_MEDIA_HOSTS 里配置。")
 
 
+def _owner_now() -> str:
+    """当前请求的数据分区键 —— 用来标记"谁先把这个视频拉进来的"。
+
+    与笔记/对话/记忆同一套口径（`auth.current_scope()`）：
+    `""` = 本机（服务器主人），具名远程调用者用名字。
+
+    ⚠️ 老的 `video_states.json` 里没有这个字段 → 那些视频**没有所有者**，
+    而 `_assert_may_replace_subtitles` 对"无所有者"一律放行 —— 升级不会把
+    已有视频锁住（宁可放松，也不要让既有数据突然不可用）。
+    """
+    from backend.services.auth import current_scope
+    return current_scope()
+
+
+def _assert_may_replace_subtitles(video_id: str, state: dict, subtitles: list) -> None:
+    """字幕**内容覆盖**的授权检查 —— 只拦"用不同内容盖掉别人的字幕"。
+
+    ★ 为什么只拦这一件事：视频库是**有意共享**的。A 处理过的视频，B 打开就能
+    直接用缓存（体验更好，这也是产品设计）。所以三种情况都放行：
+
+      · 还没建所有者（老数据、状态丢失后重建） → 放行
+      · 调用者是所有者本人，或管理员（本机）     → 放行
+      · 内容与已有缓存**完全一致**              → 放行
+        ← 这是最常见的情况：B 打开同一个视频，插件必然会重新拦截并重传一份
+          一模一样的字幕。拦掉它等于把共享体验整个毁掉。
+
+    被拦的只有一种：**内容不同、且不是所有者** —— 那才是真正的完整性问题：
+    任何人拿一个共享视频 ID 传一份伪造字幕，就能让**所有人**从这个视频得到
+    错误答案（而且看起来一切正常）。
+    """
+    from backend.services.auth import current_scope, is_admin
+    from backend.services.media.cache_service import subtitle_cache_exists, load_subtitle_cache
+
+    # ★ 用"**字段在不在**"区分两种"没有 owner 字符串"的情况 —— 它们截然不同：
+    #   · 老数据**根本没有这个字段** → 兼容策略，fail-open
+    #   · 管理员建的视频，`current_scope()` 就是空串 → 它**有**所有者，
+    #     只是所有者是"本机"。这种情况必须继续走授权检查
+    #   （原来写的是 `owner = state.get("owner") or ""` + `if not owner: return`，
+    #     把这两件事折叠成一件 —— 于是管理员建的视频对所有持钥者敞开。
+    #     这是 self-review 指出的 R1。）
+    if "owner" not in state:
+        return
+    owner = state.get("owner") or ""
+    if is_admin() or current_scope() == owner:
+        return
+    try:
+        prev = load_subtitle_cache(video_id) if subtitle_cache_exists(video_id) else None
+    except (OSError, ValueError):
+        prev = None
+    if prev is None or prev == subtitles:
+        return
+    logger.warning(f"⛔ {current_scope()} 试图用不同字幕覆盖 {owner} 的视频 {video_id}")
+    raise HTTPException(
+        403, "这个视频是他人处理的，不能覆盖它的字幕。已有字幕会直接复用 —— "
+             "请直接使用（必要时点 🔄 重建索引）。")
+
+
 @app.post("/api/videos/{video_id}/captured_subtitles_url")
 async def captured_subtitles_url(video_id: str, req: dict):
     """接收浏览器拦截的B站字幕URL：下载并缓存字幕，等用户手动触发索引。
@@ -424,15 +481,13 @@ async def captured_subtitles_url(video_id: str, req: dict):
         referer = "https://www.bilibili.com/"
 
     logger.info(f"[{video_id}] Downloading B站 subtitle (referer={referer[:60]}...)")
-    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-        resp = await client.get(url, headers={
-            "Referer": referer,
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-            "Origin": "https://www.bilibili.com",
-            "Accept": "application/json, text/plain, */*",
-        })
-        resp.raise_for_status()
-        sub_data = resp.json()
+    resp = await _get_following_allowlisted(url, headers={
+        "Referer": referer,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+        "Origin": "https://www.bilibili.com",
+        "Accept": "application/json, text/plain, */*",
+    })
+    sub_data = resp.json()
 
     body = sub_data.get("body", [])
     subtitles = []
@@ -445,6 +500,7 @@ async def captured_subtitles_url(video_id: str, req: dict):
         raise HTTPException(400, "字幕数据为空")
 
     logger.info(f"[{video_id}] B站 subtitle: {len(subtitles)} lines (cached, wait for index)")
+    _assert_may_replace_subtitles(video_id, state, subtitles)   # 别人的视频不许覆盖内容
 
     # ★ 先看**原来的**缓存，再写：判断这次抓到的字幕是不是和已有的一模一样。
     #
@@ -503,6 +559,7 @@ async def captured_subtitles(video_id: str, req: dict):
         raise HTTPException(400, "字幕数据为空")
 
     logger.info(f"[{video_id}] Received {len(subtitles)} subtitle lines from browser")
+    _assert_may_replace_subtitles(video_id, state, subtitles)   # 别人的视频不许覆盖内容
 
     state["subtitles"] = subtitles
     state["video_hash"] = video_id
@@ -576,31 +633,58 @@ async def list_conversations():
     return list_conversations()
 
 
+def _my_caller() -> str:
+    """当前调用者在 **usage_log 的 caller 列** 里的值（用于把报表收成他自己的）。
+
+    注意与 `current_scope()` 的区别：空串的语义不同 —— usage 里本机记的是
+    `"local"`（见 `LOCAL_CALLER`）。这里要的是**记账列的原始值**，所以用
+    `current_caller()`。
+    """
+    from backend.services.auth import current_caller, LOCAL_CALLER, is_admin
+    if is_admin():
+        return ""                      # 管理员看全量
+    c = current_caller() or LOCAL_CALLER
+    return c
+
+
 @app.get("/api/usage/today")
 async def usage_today():
-    """今日用量统计"""
+    """今日用量统计。
+
+    ★ 远程调用者拿到的是**他自己**的数字，不是全站总量 —— 原来所有人看到的
+    都是全站数据：既是隐私问题，也会让他误以为那是自己的用量。
+    管理员（本机）仍是全量。
+    """
     from backend.services.llm.cost_service import get_today_stats
-    return get_today_stats()
+    return get_today_stats(caller=_my_caller())
 
 
 @app.get("/api/usage/total")
 async def usage_total():
-    """总用量统计"""
+    """总用量统计（远程只看自己）"""
     from backend.services.llm.cost_service import get_total_stats
-    return get_total_stats()
+    return get_total_stats(caller=_my_caller())
 
 
 @app.get("/api/usage/by_model")
 async def usage_by_model():
-    """按模型分组统计"""
+    """按模型分组统计（远程只看自己）"""
     from backend.services.llm.cost_service import get_stats_by_model
-    return get_stats_by_model()
+    return get_stats_by_model(caller=_my_caller())
 
 
 @app.get("/api/usage/by_video")
 async def usage_by_video():
-    """按视频分组统计"""
+    """按视频分组统计 —— **管理员专用**。
+
+    与上面几个不同，这个没法"收成自己的"：它本来就是跨视频的全局清单，
+    而且**返回视频 ID 与标题**，等于把服务器上有些什么视频列出来。
+    配合"谁能改共享视频字幕"那类问题，它是一条有用的枚举线索，所以收掉。
+    """
     from backend.services.llm.cost_service import get_stats_by_video
+    from backend.services.auth import is_admin
+    if not is_admin():
+        raise HTTPException(403, "该报表只对本机管理员开放")
     return get_stats_by_video()
 
 
@@ -717,6 +801,9 @@ async def process_url(background_tasks: BackgroundTasks, req: dict):
     video_id = hashlib.md5(canonical_id.encode()).hexdigest()[:12]
 
     # 检查内存状态
+    # 重试 error 视频时要把原 owner 带过来（见下面 error 分支的说明）。
+    # 默认空 = 这是全新视频，没有需要保留的身份。
+    _preserved_owner: dict = {}
     if video_id in video_states:
         st = video_states[video_id]
         if st.get("status") == "ready":
@@ -742,13 +829,24 @@ async def process_url(background_tasks: BackgroundTasks, req: dict):
             logger.info(f"[{video_id}] Still processing, resume polling")
             return {"video_id": video_id, "status": "processing", "title": st.get("original_name", url)}
         elif st.get("status") == "error":
-            logger.info(f"Video previously failed, retrying: {video_id}")
+            # ★ 重试**不能**丢掉所有者。
+            #   原来是直接 `del video_states[video_id]`，然后落到下面的"新建"分支，
+            #   owner 被设成**当前请求者** —— 于是"等这个视频进入 error，再由我重试"
+            #   就能取得它的所有权，进而覆盖它的字幕（self-review 的 R3）。
+            #   这里把身份相关的字段留存，重试只重置状态。
+            _keep = {k: st[k] for k in ("owner",) if k in st}
+            logger.info(f"Video previously failed, retrying: {video_id}"
+                        + (f"（保留 owner={_keep['owner']!r}）" if _keep else "（原本就没有 owner 字段）"))
             del video_states[video_id]
+            _preserved_owner = _keep
 
     # 检查磁盘缓存（服务重启后内存清空，但磁盘缓存还在）
     from backend.services.media.cache_service import embedding_cache_exists, subtitle_cache_exists
     if embedding_cache_exists(video_id) or subtitle_cache_exists(video_id):
         logger.info(f"Video already indexed (disk cache): {video_id}")
+        # 注意：这条分支**不主动认领 owner** —— 磁盘上有缓存的视频是别人
+        # 处理过的（可能只是内存状态因重启丢了），此刻的调用者并不是作者。
+        # 只有从 error 重试且原本就有 owner 时才带上（**_preserved_owner）。
         video_states[video_id] = {
             "status": "ready",
             "video_path": None,
@@ -759,6 +857,7 @@ async def process_url(background_tasks: BackgroundTasks, req: dict):
             "url": url,
             "embed_url": url,
             "is_url_mode": True,
+            **_preserved_owner,
         }
         _save_states()
         return {"video_id": video_id, "status": "ready", "title": url}
@@ -797,6 +896,10 @@ async def process_url(background_tasks: BackgroundTasks, req: dict):
         "embed_url": info.get("embed_url") or url,
         "duration": info.get("duration", 0),
         "is_url_mode": True,
+        # 谁先把这个视频拉进来，谁就是所有者（用来拦住"别人覆盖它的字幕"）。
+        # ★ 重试场景用 `in` 判断而不是 `or`：管理员/本机的 owner 就是空串，
+        #   用 `or` 会被当成"没有"而改写成重试者，R3 就是这么来的。
+        "owner": _preserved_owner["owner"] if "owner" in _preserved_owner else _owner_now(),
     }
 
     # 后台处理：下载音频 → ASR → Chunk → Embedding
@@ -858,6 +961,7 @@ async def upload_video(background_tasks: BackgroundTasks, file: UploadFile = Fil
         "original_name": file.filename,
         "subtitles": None,
         "chunks": None,
+        "owner": _owner_now(),
     }
 
     # 后台处理
@@ -1518,6 +1622,72 @@ async def _asr_and_index_task(video_id: str, url: str):
             cleanup_audio(video_id)
 
 
+async def _get_following_allowlisted(url: str, headers: dict, max_hops: int = 3):
+    """GET 一个 URL，**每一跳都过白名单闸**（不交给 httpx 自动跟随）。
+
+    ★ 为什么不能只在入口校验一次：白名单是在请求进来时校验的，而
+    `follow_redirects=True` 会让一个**被允许的域**把我们带到任意地方 ——
+    例如某个允许域上的一个 302 指向 `169.254.169.254`，整道闸就被绕过去了。
+    所以这里关掉自动跟随，自己逐跳校验 `Location`。
+
+    重定向次数上限 3：正常链路（B 站 → CDN）最多一两跳，设太大只是给攻击者
+    更多绕的机会。
+
+    已知边界：这只覆盖**我们自己发的**请求。`from_url` 最终把 URL 交给 yt-dlp，
+    它内部的跳转我们管不到 —— 所以这道闸是"第一跳 + 我们能控制的每一跳都校验"，
+    不是完整 SSRF 防护。
+    """
+    import httpx
+    async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+        for _ in range(max_hops + 1):
+            resp = await client.get(url, headers=headers)
+            if resp.status_code in (301, 302, 303, 307, 308):
+                nxt = resp.headers.get("location")
+                if not nxt:
+                    # 不能走 raise_for_status()：它对 3xx 抛的是 **httpx 异常**，
+                    # 会一路冒到路由变成 500。这里要的是干净的 400。
+                    raise HTTPException(400, "重定向响应缺少 Location，已拒绝")
+                # join 能正确处理相对跳转（Location: /a/b）
+                url = str(httpx.URL(url).join(nxt))
+                _assert_url_allowed(url)          # ★ 每一跳都过闸
+                logger.info(f"字幕链接重定向 → {url[:80]}")
+                continue
+            resp.raise_for_status()
+            return resp
+    raise HTTPException(400, "重定向次数过多，已拒绝")
+
+
+def _assert_may_run_asr(video_id: str, state: dict) -> None:
+    """能不能给这个视频**重新**跑一遍 ASR。
+
+    与 `_assert_may_replace_subtitles` 是同一类判断，但拦的东西不同 ——
+    这里拦的是**重复花钱**，不是内容被替换：
+
+    · 还没有任何字幕缓存 → 放行。**首次补齐对所有人开放** —— A 建了视频没字幕，
+      B 打开看到了想点 ASR 补上，这对所有人都是好事，不该因为"不是 A"而被挡
+      （这正是产品要的共享体验）。
+    · 已有**官方**字幕 → 由调用方原样返回 already_official（本函数不管）。
+    · 已有 **ASR** 字幕 → 只有处理它的本人或管理员能重做。
+
+    ★ 为什么必须挡这一种：ASR 是整条链路上最贵的一步（按音频时长计费，实测
+    单次平均 5 万 token 量级），而它跑完会把状态置成 ready、来源标成 "asr" ——
+    于是下一次调用既不命中 409（processing）、也不命中 already_official，
+    可以**无限重跑**，每跑一次就烧一遍 ASR + embedding。
+    """
+    from backend.services.auth import current_scope, is_admin
+    from backend.services.media.cache_service import subtitle_cache_exists
+
+    if not subtitle_cache_exists(video_id):
+        return
+    owner = state.get("owner") if "owner" in state else ""
+    if is_admin() or current_scope() == owner:
+        return
+    logger.warning(f"⛔ {current_scope()} 试图重跑已有 ASR 字幕的视频 {video_id}")
+    raise HTTPException(
+        403, "该视频已经有语音识别字幕，可以直接使用。"
+             "只有处理它的本人或管理员可以重做。")
+
+
 @app.post("/api/videos/{video_id}/generate_subtitles")
 async def generate_subtitles(video_id: str, background_tasks: BackgroundTasks):
     """用语音识别生成字幕（用户手动触发，用于视频没有官方字幕的情况）"""
@@ -1532,6 +1702,9 @@ async def generate_subtitles(video_id: str, background_tasks: BackgroundTasks):
     # 已有官方字幕 → 不需要也不允许 ASR 覆盖
     if subtitle_cache_exists(video_id) and load_subtitle_source(video_id) == "official":
         return {"status": "already_official", "message": "已有官方字幕，无需语音识别"}
+
+    # 已有 **ASR** 字幕 → 只有本人/管理员能重做（拦住"反复烧 ASR"，见函数说明）
+    _assert_may_run_asr(video_id, state)
 
     url = state.get("url")
     if not url:

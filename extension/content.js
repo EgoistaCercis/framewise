@@ -296,9 +296,17 @@
         }
         localStorage.setItem("fw_api_base", v);
         apiCur.textContent = v;
+        // ★ 换了后端就必须丢掉"当前视频"的状态。
+        //   videoId 是**上一个后端**给的，新后端根本不认识它 —— 不重置的话，
+        //   下一次提问会带着旧 id 去问，后端回 404「视频不存在」，而那个报错
+        //   完全看不出是"地址换了"（实测踩过：查了半天以为是路径问题）。
+        resetVideoState();
         var probe = v + "/api/health";
         fetch(probe).then(function (r) { return r.json(); })
-            .then(function () { addMsg("system", "🔗 后端地址已设置：" + v + "（连接正常）"); })
+            .then(function () {
+                addMsg("system", "🔗 后端地址已设置：" + v + "（连接正常）");
+                addMsg("system", "已切换后端，当前视频要重新处理 —— 请刷新页面");
+            })
             .catch(function () { addMsg("error", "地址已保存，但连不上：" + probe); });
     };
 
@@ -317,11 +325,15 @@
         if (!v) {                        // 空 = 清空密钥（本机部署时是合法状态）
             localStorage.removeItem("fw_api_key");
             renderKeyState();
+            resetVideoState("🔓 密钥已清除");
             addMsg("system", "🔓 已清除访问密钥");
             return;
         }
         localStorage.setItem("fw_api_key", v);
         renderKeyState();
+        // 换密钥 = 换身份（对话/记忆/笔记都按密钥分区），当前视频的状态也一并丢掉，
+        // 免得界面上还留着上一个身份的内容。
+        resetVideoState("🔑 密钥已切换");
         // 立刻验一次：拿 /api/memory 试，它是受保护的端点，
         // 用它才能区分"密钥对了"和"根本没开鉴权"。
         apiFetch("/api/memory").then(function (r) {
@@ -381,6 +393,26 @@
             addMsg("error", "导出失败：" + (e.message || e));
         }).finally(function () { btn.disabled = false; });
     };
+
+    // ── 切换后端/密钥时，把"当前视频"的一切丢掉 ──
+    //
+    // 这些状态都是**上一个后端**给的：videoId 由后端生成，_hasSub/_subDone
+    // 反映的是那个后端上的处理进度。带着它们去问新后端只会得到
+    // 404「视频不存在」，而报错看不出原因。
+    function resetVideoState(statusText) {
+        videoId = null;
+        window._fwReady = false;
+        _hasSub = false;
+        _uploadingSub = false;
+        _subDone = false;
+        var c = document.getElementById("fw-msgs");
+        if (c) { c.innerHTML = ""; }
+        var i = document.getElementById("fw-input");
+        var s = document.getElementById("fw-send");
+        if (i) { i.disabled = true; }
+        if (s) { s.disabled = true; }
+        updateStatus(statusText || "🔗 后端已切换");
+    }
 
     function setAutoState() {
         var s = setwin.querySelector('.fws-state[data-for="auto"]');

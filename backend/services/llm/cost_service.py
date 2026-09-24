@@ -114,19 +114,27 @@ def log_usage(
     )
 
 
-def get_today_stats() -> dict:
-    """今日用量统计"""
+def get_today_stats(caller: str = None) -> dict:
+    """今日用量统计。
+
+    `caller` 传了就只统计**这个调用者**的 —— 远程用户不该看到全站总量
+    （既是隐私，也会让他误以为那是自己的用量）。不传 = 全量（管理员视角）。
+    """
     today = date.today().isoformat()
+    where, params = "date(timestamp) = ?", [today]
+    if caller:
+        where += " AND caller = ?"
+        params.append(caller)
     conn = _get_conn()
-    row = conn.execute("""
+    row = conn.execute(f"""
         SELECT
             COUNT(*) as calls,
             COALESCE(SUM(input_tokens), 0) as total_input,
             COALESCE(SUM(output_tokens), 0) as total_output,
             COALESCE(SUM(total_cost), 0) as total_cost
         FROM usage_log
-        WHERE date(timestamp) = ?
-    """, (today,)).fetchone()
+        WHERE {where}
+    """, params).fetchone()
     conn.close()
 
     return {
@@ -138,17 +146,20 @@ def get_today_stats() -> dict:
     } if row else {"date": today, "calls": 0, "total_input_tokens": 0, "total_output_tokens": 0, "total_cost": 0}
 
 
-def get_total_stats() -> dict:
-    """总用量统计"""
+def get_total_stats(caller: str = None) -> dict:
+    """总用量统计（`caller` 传了则只统计该调用者）"""
+    where, params = "", []
+    if caller:
+        where, params = " WHERE caller = ?", [caller]
     conn = _get_conn()
-    row = conn.execute("""
+    row = conn.execute(f"""
         SELECT
             COUNT(*) as calls,
             COALESCE(SUM(input_tokens), 0) as total_input,
             COALESCE(SUM(output_tokens), 0) as total_output,
             COALESCE(SUM(total_cost), 0) as total_cost
-        FROM usage_log
-    """).fetchone()
+        FROM usage_log{where}
+    """, params).fetchone()
     conn.close()
 
     return {
@@ -171,10 +182,13 @@ def get_history(limit: int = 50) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def get_stats_by_model() -> list[dict]:
-    """按模型分组统计"""
+def get_stats_by_model(caller: str = None) -> list[dict]:
+    """按模型分组统计（`caller` 传了则只看该调用者）"""
+    where, params = "", []
+    if caller:
+        where, params = " WHERE caller = ?", [caller]
     conn = _get_conn()
-    rows = conn.execute("""
+    rows = conn.execute(f"""
         SELECT
             model,
             provider,
@@ -182,10 +196,10 @@ def get_stats_by_model() -> list[dict]:
             SUM(input_tokens) as total_input,
             SUM(output_tokens) as total_output,
             SUM(total_cost) as total_cost
-        FROM usage_log
+        FROM usage_log{where}
         GROUP BY model, provider
         ORDER BY total_cost DESC
-    """).fetchall()
+    """, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
