@@ -252,7 +252,7 @@
         '<div class="fws-item" data-act="usage_today">' + icon('chart') + '<span>当天用量</span></div>' +
         '<div class="fws-item" data-act="theme">' + icon('moon') + '<span>主题切换</span></div>' +
         '<div style="padding:10px;border-top:1px solid var(--fw-border);margin-top:4px;">' +
-        '<div class="fws-label" style="margin-bottom:6px;display:flex;align-items:center;gap:7px;">' + icon('zap', 14) + '后端地址<span id="fw-api-cur" style="margin-left:auto;color:var(--fw-accent);word-break:break-all;max-width:55%;text-align:right;">加载中…</span></div>' +
+        '<div class="fws-label" style="margin-bottom:6px;display:flex;align-items:center;gap:7px;">' + icon('zap', 14) + '后端地址</div>' +
         '<div style="display:flex;gap:4px;">' +
         '<input id="fw-api-input" placeholder="http://127.0.0.1:8123" style="flex:1;padding:7px 8px;background:var(--fw-surface);border:1px solid var(--fw-border);border-radius:8px;color:var(--fw-text);font-size:11.5px;outline:none;">' +
         '<button id="fw-api-save" style="padding:7px 10px;background:var(--fw-primary);border:none;border-radius:8px;color:#fff;cursor:pointer;font-size:11.5px;">保存</button></div>' +
@@ -266,7 +266,7 @@
         '<div class="fws-hint" style="margin-top:6px;font-size:10px;line-height:1.5;">后端只监听本机时可以不设；<b>部署到服务器必须设</b>，否则后端会拒绝所有请求。</div>' +
         '</div>' +
         '<div style="padding:10px;border-top:1px solid var(--fw-border);">' +
-        '<div class="fws-label" style="margin-bottom:6px;display:flex;align-items:center;gap:7px;">' + icon('folder', 14) + '笔记保存目录<span id="fw-note-dir" style="margin-left:auto;color:var(--fw-accent);word-break:break-all;max-width:55%;text-align:right;">加载中…</span></div>' +
+        '<div class="fws-label" style="margin-bottom:6px;display:flex;align-items:center;gap:7px;">' + icon('folder', 14) + '笔记保存目录</div>' +
         '<div id="fw-note-edit" style="display:flex;gap:4px;">' +
         '<input id="fw-note-input" placeholder="后端文件路径" style="flex:1;padding:7px 8px;background:var(--fw-surface);border:1px solid var(--fw-border);border-radius:8px;color:var(--fw-text);font-size:11.5px;outline:none;">' +
         '<button id="fw-note-save" style="padding:7px 10px;background:var(--fw-primary);border:none;border-radius:8px;color:#fff;cursor:pointer;font-size:11.5px;">保存</button></div>' +
@@ -277,9 +277,9 @@
     setwin.style.top = "110px";
     document.body.appendChild(setwin);
     // ── 后端地址（存 localStorage，默认本地）──
-    var apiCur = document.getElementById("fw-api-cur");
+    // 不再在标题后面重复显示一遍地址：输入框里就是当前值，重复显示既冗余、
+    // 又把一行挤得很长（用户反馈）。
     var apiInput = document.getElementById("fw-api-input");
-    apiCur.textContent = apiBase();
     apiInput.value = apiBase();
     document.getElementById("fw-api-save").onclick = function (ev) {
         ev.stopPropagation();
@@ -295,7 +295,6 @@
             return;
         }
         localStorage.setItem("fw_api_base", v);
-        apiCur.textContent = v;
         // ★ 换了后端就必须丢掉"当前视频"的状态。
         //   videoId 是**上一个后端**给的，新后端根本不认识它 —— 不重置的话，
         //   下一次提问会带着旧 id 去问，后端回 404「视频不存在」，而那个报错
@@ -315,7 +314,10 @@
     var keyInput = document.getElementById("fw-key-input");
     function renderKeyState() {
         var k = localStorage.getItem("fw_api_key");
-        keyCur.textContent = k ? ("已设置（" + k.slice(0, 4) + "…）") : "未设置";
+        // ★ 只显示"已设置"，**不回显密钥的任何片段**。
+        //   原来显示前 4 位（"已设置（qPyx…）"），等于在屏幕上泄出密钥前缀 ——
+        //   分享截图、录屏、直播演示时都会带出去。
+        keyCur.textContent = k ? "已设置" : "未设置";
         keyCur.style.color = k ? "var(--fw-accent)" : "var(--fw-text-3)";
     }
     renderKeyState();
@@ -342,14 +344,14 @@
         }).catch(function () { addMsg("error", "密钥已保存，但连不上后端"); });
     };
 
-    var noteDir = document.getElementById("fw-note-dir");
     var noteInput = document.getElementById("fw-note-input");
     var noteHint = document.getElementById("fw-note-hint");
     var noteEdit = document.getElementById("fw-note-edit");
     // 加载后端当前笔记目录（远程调用者拿到的是自己在服务器上的分区）
+    // 不再在标题后面显示那个路径：它是后端文件系统的绝对路径，又长又对用户没用
+    // （用户反馈）。值仍然填进输入框 —— 那是"设置"时要用到的。
     apiFetch("/api/note_dir").then(function (r) { return r.json(); })
         .then(function (d) {
-            noteDir.textContent = d.note_dir;
             noteInput.value = d.note_dir;
             if (d.editable === false) {
                 // 远程连接：目录在服务器上、且只有服务器本机能改。
@@ -359,14 +361,14 @@
                                      "想存到本机就点上面的导出。";
             }
         })
-        .catch(function () { noteDir.textContent = "获取失败"; });
+        .catch(function () { addMsg("error", "获取笔记目录失败"); });
     document.getElementById("fw-note-save").onclick = function (ev) {
         ev.stopPropagation();
         var path = noteInput.value.trim();
         if (!path) { addMsg("error", "路径不能为空"); return; }
         apiFetch("/api/note_dir", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note_dir: path }) })
             .then(function (r) { return r.json(); })
-            .then(function (d) { noteDir.textContent = d.note_dir; addMsg("system", "📁 笔记保存目录已设置：" + d.note_dir); })
+            .then(function (d) { addMsg("system", "📁 笔记保存目录已设置：" + d.note_dir); })
             .catch(function () { addMsg("error", "设置失败"); });
     };
     // ── 导出笔记：后端把当前调用者那一份打包成 zip ──
