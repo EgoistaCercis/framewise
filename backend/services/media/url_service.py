@@ -5,6 +5,7 @@
 import os
 import re
 import json
+from urllib.parse import urlparse
 from loguru import logger
 import tempfile
 import subprocess
@@ -15,6 +16,10 @@ from backend import config
 from backend.services.media.cache_service import frame_cache_path, frame_cache_exists
 
 AUDIO_DIR = os.path.join(DATA_DIR, "audio")
+
+# B 站自己的域 —— **只有这些域才会被带上 B 站 Cookie**（见 _headers 的说明）。
+# 注意 hdslb.com（字幕/静态）与 bilivideo.com（媒体流）也是 B 站的，别删。
+_BILI_DOMAINS = ("bilibili.com", "b23.tv", "hdslb.com", "bilivideo.com")
 
 # yt-dlp 拉取 B站需要正确的 UA + Referer，否则返回 412 Precondition Failed
 _HTTP_HEADERS = {
@@ -58,16 +63,33 @@ def _bili_cookie() -> str:
     return f"buvid3={_buvid3_cache}" if _buvid3_cache else ""
 
 
-def _headers(extra: dict = None) -> dict:
-    """B 站请求头（含 Cookie）。所有发往 B 站的请求都该用它。
+def _is_bili_url(url: str) -> bool:
+    """这个 URL 是不是 B 站自己的域。"""
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return any(host == d or host.endswith("." + d) for d in _BILI_DOMAINS)
 
-    单独抽出来是因为**头必须一致**：漏掉 Cookie 的那个请求就是被 412 的那个，
-    而 412 只在机房 IP 上出现，本地开发完全看不出来。
+
+def _headers(url: str, extra: dict = None) -> dict:
+    """为**某个具体 URL** 构造请求头 —— **Cookie 只在目标是 B 站域时才带**。
+
+    ★ 为什么必须按 URL 判断（实测结论，不是推测）：
+    起一个与 B 站毫无关系的本地 HTTP 服务，让 yt-dlp 带上 Cookie 去访问它 ——
+    目标服务**收到了完整的 `SESSDATA`**。yt-dlp 会把 `http_headers` 里的 Cookie
+    发给它正在抓取的那个站点，**不看域名**（它只会把整串 Cookie "限定在下载目标的
+    域名"，而那正是问题：它不知道 `SESSDATA` 属于 B 站）。
+    而 `ALLOWED_MEDIA_HOSTS` 里还有 youtube.com —— 于是"任何试用者提交一个
+    YouTube 链接"就会把配置里的 B 站登录凭据送到 YouTube。
+
+    所以默认**不带** Cookie（fail-closed），只有确认目标是 B 站域才加。
     """
     h = dict(_HTTP_HEADERS)
-    ck = _bili_cookie()
-    if ck:
-        h["Cookie"] = ck
+    if _is_bili_url(url):
+        ck = _bili_cookie()
+        if ck:
+            h["Cookie"] = ck
     if extra:
         h.update(extra)
     return h
@@ -85,7 +107,7 @@ def get_video_info(url: str) -> dict:
         "quiet": True,
         "no_warnings": True,
         "force_ipv4": True,
-        "http_headers": _headers(),
+        "http_headers": _headers(url),
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
@@ -109,7 +131,7 @@ def _extract_bilibili_subtitles_api(bvid: str, p: int = 1) -> list[dict] | None:
         # Step 1: 获取视频 cid
         info_url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
         r = httpx.get(info_url, timeout=15,
-                      headers=_headers())
+                      headers=_headers(info_url))
         r.raise_for_status()
         data = r.json()["data"]
 
@@ -120,7 +142,7 @@ def _extract_bilibili_subtitles_api(bvid: str, p: int = 1) -> list[dict] | None:
         # Step 2: 获取字幕列表
         sub_url = f"https://api.bilibili.com/x/player/v2?bvid={bvid}&cid={cid}"
         r = httpx.get(sub_url, timeout=15,
-                      headers=_headers())
+                      headers=_headers(sub_url))
         r.raise_for_status()
         sub_data = r.json()["data"].get("subtitle", {}).get("subtitles", [])
 
@@ -131,7 +153,7 @@ def _extract_bilibili_subtitles_api(bvid: str, p: int = 1) -> list[dict] | None:
         sub_info = next((s for s in sub_data if "zh" in s.get("lan_doc", "").lower()), sub_data[0])
         sub_url = "https:" + sub_info["subtitle_url"] if sub_info["subtitle_url"].startswith("//") else sub_info["subtitle_url"]
 
-        r = httpx.get(sub_url, timeout=15, headers=_headers({
+        r = httpx.get(sub_url, timeout=15, headers=_headers(sub_url, {
             "Referer": f"https://www.bilibili.com/video/{bvid}",
             "Origin": "https://www.bilibili.com",
         }))
@@ -176,7 +198,7 @@ def extract_subtitles(url: str) -> list[dict] | None:
         "quiet": True,
         "no_warnings": True,
         "force_ipv4": True,
-        "http_headers": _headers(),
+        "http_headers": _headers(url),
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -188,7 +210,10 @@ def extract_subtitles(url: str) -> list[dict] | None:
                     # 下载字幕文件
                     sub_url = entries[-1]["url"]  # 取最后一个格式
                     import httpx
-                    r = httpx.get(sub_url, timeout=30, follow_redirects=True)
+                    # 这里以前连 UA/Referer 都没带 —— 与"所有 B 站请求走统一头"
+                    # 不一致，B 站对裸请求是可能 403 的。_headers 会按域决定带不带 Cookie。
+                    r = httpx.get(sub_url, timeout=30, follow_redirects=True,
+                                  headers=_headers(sub_url))
                     r.raise_for_status()
                     return _parse_vtt(r.text)
         logger.info("No B站 subtitles found, will fall back to ASR")
@@ -231,7 +256,7 @@ def get_audio_stream_url(url: str) -> str | None:
         "quiet": True,
         "no_warnings": True,
         "force_ipv4": True,
-        "http_headers": _headers(),
+        "http_headers": _headers(url),
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -265,7 +290,7 @@ def download_audio(url: str, video_id: str) -> str:
         "retries": 5,
         "socket_timeout": 30,
         "force_ipv4": True,
-        "http_headers": _headers(),
+        "http_headers": _headers(url),
     }
     # 不下载完整视频，只下原始音频流
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -366,7 +391,7 @@ def _get_stream_url(url: str) -> str:
         "quiet": True,
         "no_warnings": True,
         "force_ipv4": True,
-        "http_headers": _headers(),
+        "http_headers": _headers(url),
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)

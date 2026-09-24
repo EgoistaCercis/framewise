@@ -57,6 +57,7 @@ asyncio 的 ContextVar 天然按任务隔离，**并发请求不会串**。
 （项目里 `eval_v4_agent.py` 用的是同一个机制，解决同一类问题。）
 """
 import hmac
+import os
 import re
 from contextvars import ContextVar
 
@@ -237,8 +238,29 @@ def quota_state(caller: str) -> tuple:
     return (used >= limit, used)
 
 
+def _in_container() -> bool:
+    """是否跑在容器里（Docker / Podman）。
+
+    ★ 为什么必须单独判断：**容器里的 `HOST` 变量并不决定实际绑定地址** ——
+    `Dockerfile` 的启动命令固定 `--host 0.0.0.0`，`.env` 里的 `HOST` 只是个
+    声明。于是"`.env` 写 `HOST=127.0.0.1` ＋ 忘了配密钥"会让鉴权以为
+    "只有本机能访问"从而**放行**，而容器其实仍在 `0.0.0.0` 上监听着、
+    compose 的端口映射也已经把它发布出去 —— 直接变成一个**无鉴权的公网 API**。
+
+    这个坑值得专门堵，因为"我把它绑到本机了，那就不用配密钥了吧"是很自然的
+    推论（部署指南里也确实建议过把端口收成 `127.0.0.1:8123:8123`）。
+    """
+    return os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
+
+
 def is_local_only() -> bool:
-    """服务是否只监听本机。"""
+    """服务是否**确实**只监听本机 —— 容器里一律认为不是。
+
+    ⚠️ 注意这与"请求从哪来"无关（隧道下所有请求看起来都来自 127.0.0.1），
+    它只是"有没有必要配密钥"的判断依据。见 `_in_container` 的说明。
+    """
+    if _in_container():
+        return False
     return config.HOST in _LOCAL_HOSTS
 
 
@@ -248,6 +270,16 @@ def startup_check() -> None:
     这里只**报告**（真正的拦截在 require_key 里）—— 目的是让配置问题
     在启动时就可见，而不是等第一个请求进来才发现服务用不了。
     """
+    # 容器里 HOST 说了不算：声明与实际绑定不一致，单独喊一声。
+    # 这不只是安全问题 —— 运维的真实意图（"只让本机访问"）**并没有实现**，
+    # 光看 .env 是看不出来的。
+    if _in_container() and config.HOST in _LOCAL_HOSTS:
+        logger.warning(
+            f"⚠️  容器环境里 HOST={config.HOST}：该变量**不影响**容器的实际绑定地址"
+            f"（Dockerfile 固定 --host 0.0.0.0），所以服务并非'只监听本机'，"
+            f"**不会**因此免鉴权。要让端口只对本机开放请改 docker-compose.yml 的"
+            f"端口映射为 127.0.0.1:8123:8123，并且仍然要配置访问密钥。")
+
     keys = _load_keys()
     if keys:
         names = "、".join(keys)
