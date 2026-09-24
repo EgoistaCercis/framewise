@@ -3,6 +3,20 @@
 视频学习 AI 助手（浏览器插件）。上传视频或粘贴 B站/YouTube 链接，AI 自动建立知识索引；
 B站视频页点悬浮按钮即可对视频提问，**AI 结合字幕与按需画面分析给出带时间戳的回答，不打断学习流**。
 
+## ⚡ 立刻试用（推荐 · 不用部署、不用配任何 API Key）
+
+**装个插件就能用，后端已经跑好了。**
+
+1. 从 [Releases](https://github.com/EgoistaCercis/framewise/releases) 下载 `framewise-extension.zip`；
+   解压后在 `chrome://extensions/` 打开**开发者模式** → 「加载已解压的扩展程序」→ 选解压出来的文件夹
+2. 点插件右上角 ⚙️ **设置**，**后端地址**填 `https://fw.framewise2026.icu`
+3. **访问密钥**：在 B站私信我，或在 [Issues](https://github.com/EgoistaCercis/framewise/issues) 里留言拿一个
+4. 打开任意 B站视频（有字幕的）→ 点右侧 🎬 → 直接提问
+
+> 用的是**我部署的服务器**：你出插件，算力我出。额度有限，所以是**一人一个密钥 + 每日配额**，先到先得 🙂
+>
+> 想完全自己掌控（数据不出自己的机器），见下面的[快速开始](#-快速开始)自行部署 —— 也只需要填三个 API Key。
+
 ## ✨ 特性
 
 - 📝 **内容问答** — 带时间戳引用，点击跳转视频
@@ -17,12 +31,15 @@ B站视频页点悬浮按钮即可对视频提问，**AI 结合字幕与按需�
 
 ## 🚀 快速开始
 
+自部署的话，**只需要填三个 API Key**（聊天模型、画面分析模型、向量化模型）——
+`.env.example` 已按「必填 → 对外部署必看 → 可选」重新归类，前两组填完即可跑。
+
 ### 前置要求
 
 - Python 3.12+
 - ffmpeg（Windows 需[下载](https://ffmpeg.org/download.html)，Linux `apt install ffmpeg`）
 
-### Docker（推荐）
+### Docker 部署（自部署时推荐）
 
 ```bash
 git clone https://github.com/EgoistaCercis/framewise.git

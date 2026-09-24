@@ -31,7 +31,7 @@ from backend.services.agent.memory_agent import update_memory_async
 # 对外监听时关掉 —— 开着等于把全部 API 结构白送给扫描器。
 # 想远程看文档就设 API_DOCS=1。
 app = FastAPI(
-    title="帧知 - 视频学习Agent", version="0.1.0",
+    title="帧知 - 视频学习Agent", version="1.0.0",
     docs_url="/docs" if API_DOCS else None,
     redoc_url="/redoc" if API_DOCS else None,
     openapi_url="/openapi.json" if API_DOCS else None,
@@ -197,7 +197,7 @@ class AskFrameRequest(BaseModel):
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "version": "0.1.0"}
+    return {"status": "ok", "version": "1.0.0"}
 
 
 @app.get("/api/llm_config")

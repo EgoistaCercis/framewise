@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "帧知 - 视频学习助手",
-  "version": "0.1.1",
+  "version": "1.0.0",
   "description": "在B站/YouTube学习视频时，随时向AI提问，获得带时间戳的精准回答",
   "permissions": ["scripting", "webRequest"],
   "background": {
