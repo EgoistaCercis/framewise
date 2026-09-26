@@ -277,7 +277,8 @@ class Agent:
         messages = []
 
         # 全量字幕注入：字幕短于阈值就整段给，超长/取不到则退回 RAG 检索。
-        # 依据是评测结论（全量优于 RAG：质量 12 项胜 9，缓存后成本仅 35%），
+        # 依据是评测结论（全量优于 RAG：质量 12 项胜 9 / 负 1 / 平 2；
+        # 成本口径见 config.FULL_CONTEXT_MAX_TOKENS —— 完整账单下全量略贵约 20%），
         # 阈值存在的意义是给几小时的课程留退路（见 config.FULL_CONTEXT_MAX_TOKENS）。
         transcript = _load_transcript_context(context)
         if transcript and _estimate_tokens(transcript) <= config.FULL_CONTEXT_MAX_TOKENS:
