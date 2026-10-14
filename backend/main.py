@@ -500,6 +500,25 @@ async def captured_subtitles_url(video_id: str, req: dict):
         raise HTTPException(400, "字幕数据为空")
 
     logger.info(f"[{video_id}] B站 subtitle: {len(subtitles)} lines (cached, wait for index)")
+
+    # ★ 顺手补标题。
+    #
+    # 为什么需要：`from_url` 里 `get_video_info` 拿不到标题时（机房 IP 会被 B 站
+    # 风控 412），会落成占位符 `未命名视频（id）`，而**占位符会被永久存下来** ——
+    # 插件里、管理页里显示的都是它。但**浏览器知道真名**（`document.title`），
+    # 而插件本来就会为字幕 POST 一次，所以顺手带过来即可。
+    #
+    # 只在**当前名字是空或占位符**时才覆盖：一次字幕上传不该把已经正确的标题改名。
+    # 于是已存在的占位符视频也会被补上 —— 用户下次打开那个视频页时插件会重新 POST。
+    # （空白归一 + 截断都在这里做：客户端给的东西按不可信处理。）
+    browser_title = " ".join(str(req.get("title") or "").split())[:200]
+    if browser_title:
+        cur = (state.get("original_name") or "").strip()
+        if not cur or cur.startswith("未命名视频"):
+            state["original_name"] = browser_title
+            _save_states()
+            logger.info(f"[{video_id}] 标题已由浏览器补上：{browser_title[:40]}")
+
     _assert_may_replace_subtitles(video_id, state, subtitles)   # 别人的视频不许覆盖内容
 
     # ★ 先看**原来的**缓存，再写：判断这次抓到的字幕是不是和已有的一模一样。

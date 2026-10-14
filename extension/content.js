@@ -591,7 +591,11 @@
             if (!videoId) { setTimeout(waitAndUpload, 500); return; }
             apiFetch("/api/videos/" + videoId + "/captured_subtitles_url", {
                 method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ subtitle_url: url, referer: referer || cleanUrl(location.href) }),
+                body: JSON.stringify({
+                    subtitle_url: url,
+                    referer: referer || cleanUrl(location.href),
+                    title: pageTitle(),
+                }),
             }).then(function (r) {
                 // ★ 必须显式看 r.ok：fetch 对 HTTP 错误码**不会 reject**，
                 //   所以 400 原本也走"成功"这条分支 —— 界面显示"字幕已缓存"、
@@ -638,6 +642,20 @@
 
     // ── 工具函数 ──
     function cleanUrl(url) { try { var u = new URL(url); var s = ""; ["v", "p"].forEach(function (k) { if (u.searchParams.has(k)) s += (s ? "&" : "") + k + "=" + u.searchParams.get(k); }); return u.origin + u.pathname + (s ? "?" + s : ""); } catch (e) { return url; } }
+    // 页面标题 → 视频标题。`document.title` 带站点后缀（B站是「标题_哔哩哔哩_bilibili」，
+    // YouTube 是「标题 - YouTube」），顺手削掉。
+    //
+    // ★ 后端**只在它手上那个名字是空或占位符时**才会用这个值
+    //   （见 backend/main.py 的 captured_subtitles_url）—— 所以这里清不干净
+    //   也不会把已经正确的标题改坏，不必追求完美解析。
+    function pageTitle() {
+        return (document.title || "")
+            .replace(/\s*[_\-|]\s*哔哩哔哩[_\-|]?\s*bilibili\s*$/i, "")
+            .replace(/\s*[-_|]\s*YouTube\s*$/i, "")
+            .trim()
+            .slice(0, 200);
+    }
+
     function getCurrentTime() { try { if (window.player && window.player.getCurrentTime) return window.player.getCurrentTime(); } catch (e) { } var v = document.querySelector("video"); return v ? v.currentTime : 0; }
     function updateStatus(t) { var e = document.getElementById("fw-status"); if (e) e.textContent = t; }
     function esc(t) { var d = document.createElement("div"); d.textContent = t; return d.innerHTML; }
