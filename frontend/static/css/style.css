@@ -491,6 +491,14 @@ body {
 
 .admin-table {
     width: 100%;
+    /* ★★ `table-layout: fixed` —— 让表格宽度**结构上**与内容无关。
+       默认的 `auto` 布局里，表格的宽度是"内容想要的宽度"和"指定宽度"里取大者：
+       哪怕写了 `width:100%`，只要某个单元格的最小内容宽度更大，**表格就会变宽**，
+       把整个页面顶出去。fixed 布局则相反：列宽只由**第一行 + 显式宽度**决定，
+       内容长了就在单元格里换行/溢出，**表格宽度一律等于指定的 100%**。
+       （用户的要求原话："这个 ui 的宽度给我定死了，不论下面要显示多宽的内容
+        这个 ui 的宽度禁止变化"。这就是那条要求对应的正确机制。） */
+    table-layout: fixed;
     border-collapse: collapse;
     background: var(--surface);
     border-radius: var(--radius);
@@ -498,6 +506,10 @@ body {
     box-shadow: var(--shadow);
     font-size: 13px;
 }
+
+/* 数字列给固定宽，剩下的由文字列（谁 / 最后活跃 / 状态）分。
+   fixed 布局下没写宽度的列会平分剩余空间 —— 这些数字列很短，让它们均分太浪费。 */
+.admin-table th.num, .admin-table td.num { width: 92px; }
 .admin-table th,
 .admin-table td {
     padding: 10px 14px;

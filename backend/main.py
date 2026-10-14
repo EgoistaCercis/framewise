@@ -3,13 +3,14 @@
 多模态RAG视频学习Agent
 """
 import os
+import re
 import uuid
 import json
 import hashlib
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -1806,12 +1807,53 @@ if os.path.exists(frontend_dir):
     app.mount("/static", StaticFiles(directory=frontend_dir), name="static")
 
 
+# 页面里引用静态资源的形式：`/static/js/app.js`（本项目里都长这样）
+_STATIC_REF_RE = re.compile(r"(/static/[A-Za-z0-9_./-]+)")
+
+
+def _serve_page(filename: str):
+    """返回前端页面，并给里面引用的 `/static/…` **加上版本参数**（取自该文件的 mtime）。
+
+    ★ 为什么必须这么做 —— 这是本项目反复踩的一个坑：
+
+    Cloudflare 对 `.css` / `.js` 这类静态扩展名会套用**它自己的 4 小时缓存**，
+    而且是**覆盖 origin 的 `Cache-Control`**（我们发 `max-age=60`，它照样发 14400
+    并带 `cf-cache-status: HIT`）。浏览器再照这条 max-age 缓存一遍。
+    于是出现最难排查的组合：**HTML 是新的**（HTML 不在它的默认缓存名单里）、
+    **CSS/JS 是旧的** —— 表现为"代码明明改了、部署了，页面上就是没变"，
+    而页面上那点变化看起来像"改错了"，不像是缓存。实测为此查了好几轮。
+
+    给资源 URL 挂一个随文件内容变化的 query，**换 URL 就等于换缓存键** ——
+    CDN 和浏览器都只能重新拉，与它们的缓存策略无关。
+    版本号用文件 mtime，**不需要手动维护**（手动 bump 迟早会忘，忘了就又回到这个坑）。
+    """
+    path = os.path.join(frontend_dir, filename)
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    def _stamp(m):
+        rel = m.group(1)
+        target = os.path.join(frontend_dir, rel[len("/static/"):])
+        try:
+            return f"{rel}?v={int(os.path.getmtime(target))}"
+        except OSError:
+            return rel      # 文件不在了就别加，让它正常 404，暴露出真正的问题
+
+    # 页面本身**不许缓存**：它引用的资源 URL 带版本号，只有每次都拿到最新的 HTML，
+    # 才谈得上"指向最新那份资源"。否则 HTML 被缓存住 → 指的仍是旧版本号 → 白做。
+    # （no-cache 是"每次都要跟服务器确认"，不是"不存"—— 有 etag，没变就 304。）
+    return HTMLResponse(_STATIC_REF_RE.sub(_stamp, html),
+                        headers={"Cache-Control": "no-cache"})
+
+
 @app.get("/")
 async def index():
     """前端入口"""
-    index_path = os.path.join(frontend_dir, "index.html")
-    if os.path.exists(index_path):
-        return FileResponse(index_path)
+    page = _serve_page("index.html")
+    if page is not None:
+        return page
     return JSONResponse({"message": "帧知API服务运行中", "docs": "/docs"}, status_code=200)
 
 
@@ -1823,9 +1865,9 @@ async def admin_page():
     所以这个 HTML 必须是"零数据"的：它只发请求，数据全在 `/api/admin/*` 后面，
     由 `is_admin()` 把关。**HTML/JS 里不允许出现任何密钥或数据。**
     """
-    path = os.path.join(frontend_dir, "admin.html")
-    if os.path.exists(path):
-        return FileResponse(path)
+    page = _serve_page("admin.html")
+    if page is not None:
+        return page
     return JSONResponse({"detail": "管理页尚未部署"}, status_code=404)
 
 
