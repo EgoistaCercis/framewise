@@ -65,6 +65,11 @@ def init():
     db.execute("CREATE INDEX IF NOT EXISTS idx_conv_video ON conversations(video_id, timestamp)")
     db.execute("CREATE INDEX IF NOT EXISTS idx_conv_scope "
                "ON conversations(scope, video_id, timestamp)")
+    # 管理页下钻要取"某人的最近提问"：**跨视频**、按时间倒序。
+    # 上面那条的中间夹了 video_id，帮不上"不限定视频、只要最新几条"的排序 ——
+    # 这是全项目唯一一处不带 video_id 的大范围对话查询。
+    db.execute("CREATE INDEX IF NOT EXISTS idx_conv_scope_role "
+               "ON conversations(scope, role, timestamp)")
     db.commit()
     db.close()
 

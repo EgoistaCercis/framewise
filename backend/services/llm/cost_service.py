@@ -5,7 +5,7 @@
 import os
 import sqlite3
 from loguru import logger
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 from backend.config import DATA_DIR
 
@@ -65,6 +65,19 @@ def _migrate():
             conn.execute(f"ALTER TABLE usage_log ADD COLUMN {col} {ddl}")
         except sqlite3.OperationalError:
             pass  # 列已存在
+
+    # ★ 索引：tokens_used_today() 在**每个通过鉴权的请求**上都要跑（入口配额检查），
+    #   而 usage_log 上原本一条索引都没有。
+    #
+    # ⚠️ 配套要把 WHERE 也改掉，否则索引只有第一列生效：
+    #   实测 EXPLAIN QUERY PLAN ——
+    #     substr 写法  → `USING INDEX (caller=?)`            ← 只吃到第一列
+    #     区间比较写法 → `USING INDEX (caller=? AND timestamp>? AND timestamp<?)`
+    #   差别是"命中该 caller 的行再逐行算表达式" vs "直接范围扫"，
+    #   收益与该调用者的历史行数成正比（不是"从全表扫变成走索引"）。
+    #   两处必须一起改，见 tokens_used_today。
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_caller "
+                 "ON usage_log(caller, timestamp)")
     conn.commit()
     conn.close()
 
@@ -279,14 +292,26 @@ def tokens_used_today(caller: str) -> int:
     """某个调用者**当天**已消耗的 token（输入+输出）。
 
     用于每日配额判断。按自然日、本地时区（timestamp 存的就是本地 iso 格式）。
+
+    ★ 这里用**区间比较**而不是 `substr(timestamp,1,10) = ?`：后者把列包在函数里，
+    索引只有第一列（caller）生效 —— 实测 EXPLAIN QUERY PLAN：
+        substr 写法  → USING INDEX (caller=?)
+        区间比较写法 → USING INDEX (caller=? AND timestamp>? AND timestamp<?)
+    也就是"命中该人的行再逐行算表达式" vs "直接范围扫"（**不是**全表扫，
+    别把这条索引的收益说过头）。而配额检查在**每个通过鉴权的请求**上都要跑，
+    所以这处值得换。timestamp 是 ISO 串，字符串比较与按日期截断等价
+    （`"2026-10-14T…" >= "2026-10-14"` 且 `< "2026-10-15"`）。
     """
     if not caller:
         return 0
+    now = datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
     conn = _get_conn()
     row = conn.execute(
         "SELECT COALESCE(SUM(input_tokens + output_tokens), 0) AS t "
-        "FROM usage_log WHERE caller = ? AND substr(timestamp, 1, 10) = ?",
-        (caller, datetime.now().strftime("%Y-%m-%d"))).fetchone()
+        "FROM usage_log WHERE caller = ? AND timestamp >= ? AND timestamp < ?",
+        (caller, today, tomorrow)).fetchone()
     conn.close()
     return int(row["t"] or 0)
 
