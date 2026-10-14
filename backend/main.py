@@ -100,19 +100,20 @@ async def auth_guard(request, call_next):
 
 @app.middleware("http")
 async def static_cache_control(request, call_next):
-    """给 `/static/*` 压一个**短**缓存。
+    """给 `/static/*` 一个明确的短缓存（60 秒）。
 
-    ★ 为什么必须显式给：origin 原本一个 `Cache-Control` 都不发（只有 etag /
-    last-modified），于是 Cloudflare 对 `.css` / `.js` 这类扩展名套用**它自己的
-    默认 4 小时缓存**（响应头里那条 `Cache-Control: max-age=14400` 就是它加的）。
+    ⚠️ **它挡不住 Cloudflare**。实测：origin 发 `max-age=60`，Cloudflare 仍然
+    发出 `Cache-Control: public, max-age=14400` + `cf-cache-status: HIT` ——
+    对 `.css` / `.js` 这类静态扩展名，**它会覆盖 origin 的缓存头、走自己的 4 小时**。
+    要真正控制得去 Cloudflare 后台（Browser Cache TTL 改为 "Respect Existing
+    Headers"，或给 `/static/*` 建一条 Cache Rule，开发期直接开 Development Mode）。
 
-    后果很具体：前端改完部署上去，**你看到的还是旧版**，而且 `admin.html`（HTML
-    不在它的默认缓存名单里）是新的、`style.css` 是旧的 —— 出现"新 HTML 配旧 CSS"
-    这种最难看懂的组合。实测踩过：管理页的 CSS 修复部署一小时后，线上发出的仍是
-    改动前那份（`cf-cache-status: HIT`、`age: 4111`），于是把"改了没生效"查了半天。
+    那为什么还留着这段？两个理由：
+      ① 直连 origin / 本机开发时它就是生效的那个值（前端改完 60 秒内可见）；
+      ② 换到没有这种"静态扩展名默认缓存"行为的反代（nginx/Caddy 默认也不会
+         凭空给 4 小时）时，这个头就是正确且必要的。
 
-    给一个明确的短 max-age，Cloudflare 就会按它来（它只在 origin 没给的时候
-    才套默认值）。60 秒对个人部署完全够：改完等一分钟刷新即可见。
+    留着的实际代价是零：最坏情况就是 Cloudflare 无视它。
     """
     response = await call_next(request)
     if request.url.path.startswith("/static/"):
