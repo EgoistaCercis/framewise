@@ -554,3 +554,18 @@ body {
 @media (max-width: 768px) {
     .admin-table th:nth-child(3), .admin-table td:nth-child(3) { display: none; }  /* 移动端先藏 token 列 */
 }
+
+/* 管理页要**整页滚动**，而主页的 body 在 style.css 顶部设了
+   `height:100vh + overflow:hidden`（主页是固定视口的应用：顶栏 + 两栏，本身不滚动）。
+   管理页是个长文档，复用那套样式会被裁在 100vh 里、滚不动 ——
+   所以给它的 body 单独加这个类覆盖掉，**不动主页**。 */
+body.admin-page {
+    height: auto;
+    min-height: 100vh;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+/* 切换用户时不要清空面板（那会让整页先缩再涨，看着忽大忽小）——
+   保留上一个用户的内容、把它压暗，等新数据回来再替换。 */
+.detail-panel.loading { opacity: .5; transition: opacity .15s ease; }

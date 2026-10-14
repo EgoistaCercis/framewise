@@ -163,13 +163,14 @@
 
     function openDetail(who, tr) {
         currentWho = who;
-        $("detailPanel").hidden = false;
+        clearNotice();
+        var panel = $("detailPanel");
+        panel.hidden = false;
+        // ★ 切换用户时**不清空面板**：清空会让整页先缩下去、数据回来再涨上来，
+        //   连续点几个用户就是"忽大忽小"。保留上一个用户的内容并压暗，
+        //   等新数据回来一次性替换 —— 高度只在内容真的不同时才变。
+        panel.classList.add("loading");
         $("detailWho").textContent = who;
-        $("detailMeta").textContent = "加载中…";
-        $("videoRows").textContent = "";
-        $("questionList").textContent = "";
-        $("videoTable").hidden = true;
-        $("questionEmpty").hidden = true;
 
         fetch("/api/admin/trial-users/" + encodeURIComponent(who))
             .then(function (r) {
@@ -181,9 +182,11 @@
                 // 期间用户又点了别人 → 丢掉这次的结果，别覆盖新面板
                 if (currentWho !== who) return;
                 renderDetail(d);
+                panel.classList.remove("loading");
             })
             .catch(function (e) {
-                $("detailMeta").textContent = "";
+                if (currentWho !== who) return;
+                panel.classList.remove("loading");
                 showNotice("打开 " + who + " 的详情失败：" + e.message, "warn");
             });
     }
@@ -209,7 +212,9 @@
         $("userTable").hidden = true;
         $("detailPanel").hidden = true;
         currentWho = null;
-        showNotice("加载中…");
+        // 「加载中」写在顶栏，**不用提示条** —— 提示条一出现一消失，
+        // 下面的表格就会整体上下跳一次（错误提示才值得占那一行）
+        $("generatedAt").textContent = "加载中…";
 
         fetch("/api/admin/trial-users")
             .then(function (r) {
