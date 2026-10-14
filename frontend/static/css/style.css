@@ -527,6 +527,17 @@ body {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     box-shadow: var(--shadow);
+    /* 高度**有界**：点不同的人时内容多少差别很大（20 条提问 vs 0 条），
+       不设框的话面板高度会大幅变、带动整页上下动。现在内容多了**面板内滚**，
+       少了也不塌成一条。 */
+    min-height: 180px;
+    max-height: 70vh;
+    overflow-y: auto;
+    /* 面板自己就是滚动容器（上一行），所以这里要让滚动槽常驻 ——
+       否则面板内一出现滚动条，它的**内容**会再窄 15px：同一个"宽度在变"的
+       毛病换个地方犯。这里挂 scrollbar-gutter 是有效的（面板是自己的滚动容器，
+       不涉及"body 的 overflow 传播到视口"那个坑）。 */
+    scrollbar-gutter: stable;
 }
 .detail-head { display: flex; align-items: center; gap: 12px; }
 .detail-head h3 { margin: 0; font-size: 15px; }
@@ -562,10 +573,19 @@ body {
 body.admin-page {
     height: auto;
     min-height: 100vh;
-    overflow-y: auto;
     overflow-x: hidden;
+    /* ★ 用 `scroll` 而不是 `auto`：**滚动条始终占位**。
+       用 auto 的话，点数据多的用户 → 页面变长 → 滚动条出现 → 可用宽度少约 15px
+       → 面板和表格整体变窄；点数据少的又变宽 —— 表现就是"面板宽度在变"。
+       （试过 `scrollbar-gutter: stable`，但 body 的 overflow 会**传播到视口**
+        （html 是 visible 时），真正持有滚动条的是视口，那条属性挂在 body 上不可靠。）
+       代价是右侧常驻一条滚动槽，换来确定性。 */
+    overflow-y: scroll;
 }
 
 /* 切换用户时不要清空面板（那会让整页先缩再涨，看着忽大忽小）——
    保留上一个用户的内容、把它压暗，等新数据回来再替换。 */
 .detail-panel.loading { opacity: .5; transition: opacity .15s ease; }
+
+/* （详情面板的 min/max-height 与滚动约束合并到了上面那一个块里 ——
+   同一个类散成两处，正是以后改漏一处的来源。） */
