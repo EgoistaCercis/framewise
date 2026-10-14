@@ -460,7 +460,9 @@ body {
 .topbar-link:hover { color: var(--accent); border-color: var(--accent); }
 
 .admin-container {
-    max-width: 1100px;
+    /* 1100px → 2200px：提问原文长起来之后 1100 太挤（用户反馈"撑宽了"）。
+       这里是 **max-width**，窄窗口下仍然是满宽，宽屏才吃满这个值。 */
+    max-width: 2200px;
     margin: 0 auto;
     padding: 24px 20px 60px;
 }
@@ -501,6 +503,12 @@ body {
 .admin-table tbody tr:last-child td { border-bottom: none; }
 .admin-table .num { text-align: right; font-variant-numeric: tabular-nums; }
 .admin-table .cost-cell { color: var(--accent); }
+
+/* ★ 单元格里的长串必须能断。
+   表格有个容易忽略的特性：**它不会缩到比"内容的最小宽度"还窄** ——
+   一个长标题、一段没有空格的长文本，就能把整张表顶宽，进而把整个页面顶宽
+   （用户反馈"提问把那一段把界面撑宽了"就是这个）。 */
+.admin-table th, .admin-table td { overflow-wrap: anywhere; }
 
 .row-clickable { cursor: pointer; transition: background .15s ease; }
 .row-clickable:hover { background: var(--surface2); }
@@ -560,7 +568,13 @@ body {
 .q-meta { font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; }
 /* 提问原文按**纯文本**呈现：靠 CSS 换行，而不是往 DOM 里拼 <br>
    （admin.js 里禁止 innerHTML，见那个文件开头的说明） */
-.q-text { font-size: 12.5px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+.q-text {
+    font-size: 12.5px;
+    line-height: 1.65;
+    white-space: pre-wrap;        /* 保留原文换行 */
+    overflow-wrap: anywhere;      /* 没有空格的超长串（URL、长英文）也能断 */
+    word-break: break-word;       /* 旧浏览器兜底 */
+}
 
 @media (max-width: 768px) {
     .admin-table th:nth-child(3), .admin-table td:nth-child(3) { display: none; }  /* 移动端先藏 token 列 */
