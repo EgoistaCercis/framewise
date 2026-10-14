@@ -441,3 +441,116 @@ body {
     .main-container { flex-direction: column; }
     .chat-panel { width: 100%; height: 50%; }
 }
+
+/* ═══════════════════════════════════════════
+   管理页（/admin）—— 试用者使用情况
+   复用上面的 :root 变量，不引入新配色
+   ═══════════════════════════════════════════ */
+
+.topbar-link {
+    margin-left: 10px;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text-secondary);
+    font-size: 13px;
+    text-decoration: none;
+    transition: color .18s ease, border-color .18s ease;
+}
+.topbar-link:hover { color: var(--accent); border-color: var(--accent); }
+
+.admin-container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 24px 20px 60px;
+}
+
+.notice {
+    padding: 10px 14px;
+    margin-bottom: 16px;
+    border-radius: var(--radius);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.7;
+}
+.notice-warn { border-color: var(--danger); color: var(--text); }
+
+.admin-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: var(--surface);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: var(--shadow);
+    font-size: 13px;
+}
+.admin-table th,
+.admin-table td {
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+}
+.admin-table th {
+    color: var(--text-secondary);
+    font-weight: 500;
+    font-size: 12px;
+    background: var(--surface2);
+}
+.admin-table tbody tr:last-child td { border-bottom: none; }
+.admin-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.admin-table .cost-cell { color: var(--accent); }
+
+.row-clickable { cursor: pointer; transition: background .15s ease; }
+.row-clickable:hover { background: var(--surface2); }
+
+.badge {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 999px;
+    font-size: 11.5px;
+    background: var(--surface2);
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+.badge-ok { color: var(--accent); }
+.badge-warn { color: var(--danger); }
+.badge-muted { color: var(--text-secondary); opacity: .75; }
+
+.muted { color: var(--text-secondary); font-size: 12px; }
+
+.detail-panel {
+    margin-top: 22px;
+    padding: 18px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+}
+.detail-head { display: flex; align-items: center; gap: 12px; }
+.detail-head h3 { margin: 0; font-size: 15px; }
+.detail-head .btn { margin-left: auto; }
+.detail-panel h4 {
+    margin: 20px 0 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+.detail-panel .admin-table { box-shadow: none; font-size: 12.5px; }
+
+.q-item {
+    padding: 9px 12px;
+    margin-bottom: 8px;
+    background: var(--surface2);
+    border-left: 3px solid var(--primary);
+    border-radius: 6px;
+}
+.q-meta { font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; }
+/* 提问原文按**纯文本**呈现：靠 CSS 换行，而不是往 DOM 里拼 <br>
+   （admin.js 里禁止 innerHTML，见那个文件开头的说明） */
+.q-text { font-size: 12.5px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+
+@media (max-width: 768px) {
+    .admin-table th:nth-child(3), .admin-table td:nth-child(3) { display: none; }  /* 移动端先藏 token 列 */
+}

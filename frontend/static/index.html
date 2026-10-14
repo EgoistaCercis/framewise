@@ -13,6 +13,10 @@
             <span class="logo-icon">🎬</span>
             <h1>帧知</h1>
             <span class="logo-sub">视频学习Agent</span>
+            <!-- 管理页入口。对试用者可见 —— 这不是泄露："隐藏入口"不是安全边界
+                 （/static/admin.html 一直能打开），真正的门是后端的 is_admin()。
+                 留个链接反而让主人自己下次找得到。 -->
+            <a class="topbar-link" href="/admin" title="看试用者使用情况（需管理员密钥）">📊 使用情况</a>
         </div>
         <div class="upload-area">
             <input type="file" id="videoFile" accept="video/*" hidden>
@@ -86,6 +90,8 @@
         </section>
     </main>
 
+    <!-- api-client 必须在 app.js **之前**：它 monkey-patch window.fetch 来统一带密钥 -->
+    <script src="/static/js/api-client.js"></script>
     <script src="/static/js/app.js"></script>
 </body>
 </html>

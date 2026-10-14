@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>帧知 - 使用情况</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- 顶部栏：结构与主页一致，右侧只留"刷新"和回主页 -->
+    <header class="topbar">
+        <div class="logo">
+            <span class="logo-icon">📊</span>
+            <h1>使用情况</h1>
+            <span class="logo-sub" id="generatedAt"></span>
+        </div>
+        <div class="upload-area">
+            <a class="btn btn-secondary" href="/">← 回主页</a>
+            <button id="refreshBtn" class="btn btn-secondary">🔄 刷新</button>
+        </div>
+    </header>
+
+    <main class="admin-container">
+        <!-- 提示区：加载中 / 权限不足 / 出错都显示在这里 -->
+        <div id="notice" class="notice" hidden></div>
+
+        <table class="admin-table" id="userTable" hidden>
+            <thead>
+                <tr>
+                    <th>谁</th>
+                    <th class="num">调用</th>
+                    <th class="num">token</th>
+                    <th class="num">费用</th>
+                    <th class="num">今日</th>
+                    <th>最后活跃</th>
+                    <th>状态</th>
+                </tr>
+            </thead>
+            <tbody id="userRows"></tbody>
+        </table>
+
+        <!-- 下钻面板：点某一行后填充 -->
+        <section id="detailPanel" class="detail-panel" hidden>
+            <div class="detail-head">
+                <h3 id="detailWho"></h3>
+                <button id="closeDetail" class="btn btn-secondary">收起</button>
+            </div>
+            <div id="detailMeta" class="muted"></div>
+
+            <h4>看过的视频</h4>
+            <table class="admin-table" id="videoTable">
+                <thead>
+                    <tr>
+                        <th>视频</th>
+                        <th class="num">调用</th>
+                        <th class="num">费用</th>
+                        <th class="num">提问</th>
+                        <th>最后</th>
+                    </tr>
+                </thead>
+                <tbody id="videoRows"></tbody>
+            </table>
+            <div id="videoEmpty" class="muted" hidden>没有记录</div>
+
+            <h4>最近提问</h4>
+            <div id="questionList"></div>
+            <div id="questionEmpty" class="muted" hidden>没有记录</div>
+        </section>
+    </main>
+
+    <!-- api-client 必须在 admin.js 之前：它 monkey-patch window.fetch 来统一带密钥 -->
+    <script src="/static/js/api-client.js"></script>
+    <script src="/static/js/admin.js"></script>
+</body>
+</html>

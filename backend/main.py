@@ -728,6 +728,40 @@ async def usage_history(limit: int = 30):
     return rows
 
 
+# ═══════════════════════════════════════════
+# 管理（看试用者的使用情况）
+# ═══════════════════════════════════════════
+#
+# ★ 与上面 `/api/usage/*` 的做法**刻意相反**：那些是"远程调用者降级成只看自己"，
+#   这两个是"要么是管理员、要么 403" —— 因为它们给的是**所有人**的名字、
+#   用量和**提问原文**，没有"折中成自己那一份"的说法。
+
+@app.get("/api/admin/trial-users")
+async def admin_trial_users():
+    """试用者总览：谁 / 调用了多少次 / token / 费用 / 最后活跃 / 状态。"""
+    from backend.services.auth import is_admin
+    from backend.services.admin_service import list_trial_users
+
+    if not is_admin():
+        raise HTTPException(403, "该报表只对管理员开放")
+    return list_trial_users()
+
+
+@app.get("/api/admin/trial-users/{who}")
+async def admin_trial_user_detail(who: str, questions: int = 20, videos: int = 50):
+    """某个试用者：他看过的视频 + 他最近问了什么。"""
+    from backend.services.auth import is_admin
+    from backend.services.admin_service import drill_down
+
+    if not is_admin():
+        raise HTTPException(403, "该报表只对管理员开放")
+    # 上限必须卡死：这两个数字直接进 SQL 的 LIMIT，放开就等于给了一个
+    # "一条请求读全库"的入口
+    return drill_down(who,
+                      questions=max(1, min(questions, 100)),
+                      videos=max(1, min(videos, 200)))
+
+
 # ═══════════════════════════════════════════════════════
 # 定价（pricing 组件）
 # ═══════════════════════════════════════════════════════
@@ -1737,6 +1771,20 @@ async def index():
     if os.path.exists(index_path):
         return FileResponse(index_path)
     return JSONResponse({"message": "帧知API服务运行中", "docs": "/docs"}, status_code=200)
+
+
+@app.get("/admin")
+async def admin_page():
+    """管理页入口（看试用者使用情况）。
+
+    ⚠️ 页面路由**不受鉴权中间件管**（它只拦 `/api/`，见 auth._API_PREFIX）——
+    所以这个 HTML 必须是"零数据"的：它只发请求，数据全在 `/api/admin/*` 后面，
+    由 `is_admin()` 把关。**HTML/JS 里不允许出现任何密钥或数据。**
+    """
+    path = os.path.join(frontend_dir, "admin.html")
+    if os.path.exists(path):
+        return FileResponse(path)
+    return JSONResponse({"detail": "管理页尚未部署"}, status_code=404)
 
 
 # ═══════════════════════════════════════════
