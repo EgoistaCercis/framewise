@@ -460,8 +460,18 @@ body {
 .topbar-link:hover { color: var(--accent); border-color: var(--accent); }
 
 .admin-container {
-    /* 1100px → 2200px：提问原文长起来之后 1100 太挤（用户反馈"撑宽了"）。
-       这里是 **max-width**，窄窗口下仍然是满宽，宽屏才吃满这个值。 */
+    /* ★ `width: 100%` 不是可有可无的 —— 少了它，这一页的**宽度会跟着内容变**：
+       主页的 `body` 是 `display:flex; flex-direction:column`，而本元素是它的
+       flex item。在 flexbox 里，**cross 轴上的 auto margin（下面那句 `margin:0 auto`）
+       会吃掉剩余空间**，于是它不再"拉伸填满"，而是**收缩到内容宽度**。
+       后果实测（无头 Chrome 量的）：
+           提问 71 字  → 容器 886px
+           提问 142 字 → 容器 1363px（撞到视口）
+       也就是"提问越长、整个界面越宽"。
+       （另外 `max-width` 也不能救它 —— 那只是上限，下限仍由内容决定。
+        我先把它从 1100 改到 2200 反而让能涨的范围更大，是治错了方向。）
+    */
+    width: 100%;
     max-width: 2200px;
     margin: 0 auto;
     padding: 24px 20px 60px;
