@@ -76,6 +76,15 @@ _SCOPE_NAME_RE = re.compile(r"^[0-9A-Za-z_一-鿿-]{1,32}$")
 # `API_AUTH_KEY`（单个共享密钥）在内部用的名字
 SHARED_KEY_NAME = "default"
 
+# `API_ADMIN_KEY`（管理员密钥）在记账列（usage_log.caller）里的名字。
+# 取 `admin` 而不是 `owner`：它描述的是**能力**（能看全局），而不是"这是谁"。
+ADMIN_CALLER = "admin"
+# 体验者不能取的名字 —— 否则两人的用量会混进同一行，
+# 管理页下钻时会把别人的提问挂到这个人名下。
+# 只放 ADMIN_CALLER：`default` 那条路 `_parse_keys` 里已有专门的拦截
+# （且只在真配了 API_AUTH_KEY 时才拦），把 `default` 也塞进来会平白改变既有行为。
+_RESERVED_NAMES = {ADMIN_CALLER}
+
 
 def sanitize_scope_name(name: str) -> str:
     """把调用者名字规整成安全的目录名。
@@ -130,21 +139,30 @@ def current_scope() -> str:
     数据明明还在磁盘上，只是没被去找。所以本机必须继续读老桶。
 
     调用方约定：拿到空串就用「不分区」的路径（根目录 / 不筛 caller 的查询）。
+
+    ★ 管理员密钥那条路也归到空串：握着它的人就是服务器主人，无论从哪连都该是
+    **同一个身份**。此前从隧道远程连（共享密钥 → `default`）看到的是空记忆、
+    空笔记 —— 换管理员密钥之后，远程看到的就是自己本机那一份。
     """
     caller = current_caller()
-    return "" if caller in (_NO_CALLER, LOCAL_CALLER) else caller
+    return "" if caller in (_NO_CALLER, LOCAL_CALLER, ADMIN_CALLER) else caller
 
 
 def is_admin() -> bool:
-    """当前请求是不是「服务器主人」（本机直连 / 无请求上下文）。
+    """当前请求是不是「服务器主人」：本机直连 / 无请求上下文 / **持管理员密钥**。
 
-    用来把**改动服务器级配置**的能力收在本机：改笔记目录、改定价表。
-    远程具名调用者一律不是 —— 它们各自的数据是隔离的，但服务器配置是所有人的。
+    用来把服务器级能力收在自己手里：改笔记目录、改定价表、看所有试用者的用量与
+    提问原文。远程具名调用者一律不是 —— 他们各自的数据是隔离的。
+
+    ★ 为什么直接判 caller，而不是沿用 `not current_scope()`：
+    管理员密钥也映射到空串（见 `current_scope`），于是"scope 为空"就同时是
+    "本机"和"管理员"两种情况 —— 用 `not current_scope()` 结果**碰巧对**，
+    但读起来像是在测另一件事，规则被藏进了另一个函数的副作用里。规则只写一处。
 
     注意与 `is_local_only()` 的区别：那个看的是**服务绑定在哪个地址**
     （决定"没配密钥时要不要 fail-closed"），这个看的是**当前请求是谁**。
     """
-    return not current_scope()
+    return current_caller() in (_NO_CALLER, LOCAL_CALLER, ADMIN_CALLER)
 
 
 def _parse_keys() -> dict:
@@ -185,6 +203,11 @@ def _validate_names(keys: dict) -> dict:
     """
     kept, seen = {}, {}
     for name, key in keys.items():
+        if name in _RESERVED_NAMES:
+            logger.error(f"⛔ API_AUTH_KEYS 的名字 {name!r} 是保留名（管理员专用），"
+                         f"该条目已忽略 —— 两人共用同一个名字会让用量混进同一行，"
+                         f"管理页下钻时把别人的提问挂到他名下。请改名")
+            continue
         if not scope_name_ok(name):
             logger.error(f"⛔ API_AUTH_KEYS 的名字 {name!r} 不合法（只允许数字/字母/"
                          f"下划线/连字符/中文，且 ≤32 字符），该条目已忽略，请改名")
@@ -214,12 +237,38 @@ def _load_keys() -> dict:
     ② 校验里的 ERROR 只该在配置变化时喊一次，而不是每个请求喊一次。
     """
     global _keys_cache
-    sig = (config.API_AUTH_KEY or "", config.API_AUTH_KEYS or "")
+    # 签名必须把 API_ADMIN_KEY 也算进来：否则"只改了管理员密钥、没动其它两行"时，
+    # 签名不变 → 缓存不失效 → 下面那条撞车检查不会重跑（改完不生效，得重启才看得见）。
+    sig = (config.API_AUTH_KEY or "", config.API_AUTH_KEYS or "",
+           config.API_ADMIN_KEY or "")
     if _keys_cache[0] == sig:
         return _keys_cache[1]
     keys = _validate_names(_parse_keys())
+
+    # ★ 管理员密钥与某把体验者密钥**同值**时必须拦掉 —— 这不是数据串桶，
+    #   是**提权**：require_key 里管理员那条分支在前，先命中它，
+    #   等于把这个体验者直接提升成管理员（能看所有人的提问原文、能改定价表）。
+    #   取舍与 `_parse_keys` 里那条重名拦截一致：配置错了要**立刻可见**，
+    #   所以报 ERROR 并丢掉那条体验者密钥（他会 401），而不是安静地放行。
+    if config.API_ADMIN_KEY:
+        clash = [n for n, k in keys.items() if k == config.API_ADMIN_KEY]
+        for n in clash:
+            logger.error(f"⛔ API_AUTH_KEYS 里 {n!r} 的密钥与 API_ADMIN_KEY **相同** —— "
+                         f"它会先命中管理员那条路，等于给了这个人管理员权限。"
+                         f"已忽略该条，请给 {n!r} 换一把密钥")
+            keys.pop(n)
+
     _keys_cache = (sig, keys)
     return keys
+
+
+def configured_names() -> set:
+    """当前 .env 里还在生效的调用者名字。
+
+    给管理页用：能标出"这个人的密钥已经不在配置里了"（＝已吊销），
+    而这件事只有后端知道 —— 前端拿不到 .env。
+    """
+    return set(_load_keys())
 
 
 def quota_state(caller: str) -> tuple:
@@ -228,10 +277,14 @@ def quota_state(caller: str) -> tuple:
     入口检查（`require_key`）与网关复查（`gateway._check_quota`）共用这一份判断 ——
     两边各写一遍的话，很容易一边按 caller 算、一边按 scope 算，口径就分叉了。
 
-    限额未开（`API_DAILY_TOKEN_LIMIT=0`）、无调用者、或本机免鉴权那条路 → `(False, 0)`。
+    限额未开（`API_DAILY_TOKEN_LIMIT=0`）、无调用者、本机免鉴权、或**管理员** → `(False, 0)`。
+
+    管理员豁免的理由和本机那条一样：这个限额是给体验者设的刹车（防止密钥被拿去
+    无限烧额度），**不该把主人自己锁在门外** —— 否则你在服务器上调试时会先被自己的
+    限额挡住，而那时你恰恰是唯一有权限改配置的人。
     """
     limit = config.API_DAILY_TOKEN_LIMIT
-    if limit <= 0 or not caller or caller == LOCAL_CALLER:
+    if limit <= 0 or not caller or caller in (LOCAL_CALLER, ADMIN_CALLER):
         return (False, 0)
     from backend.services.llm.cost_service import tokens_used_today
     used = tokens_used_today(caller)
@@ -284,6 +337,12 @@ def startup_check() -> None:
     if keys:
         names = "、".join(keys)
         logger.info(f"🔒 访问鉴权已开启（X-API-Key）：{len(keys)} 个调用者 —— {names}")
+        # 管理员密钥有没有生效，必须在启动时就看得见 —— 否则你只能靠"打开管理页
+        # 试试看"来发现，而那时你已经以为是代码出问题了。
+        if config.API_ADMIN_KEY:
+            logger.info(f"👑 管理员密钥已开启（记账名 {ADMIN_CALLER!r}）—— /api/admin/* 对它开放")
+        else:
+            logger.info("👑 未配置 API_ADMIN_KEY —— /api/admin/* 仅本机直连可用")
         if config.API_DAILY_TOKEN_LIMIT:
             logger.info(f"📊 每人每日上限：{config.API_DAILY_TOKEN_LIMIT:,} token")
         else:
@@ -361,6 +420,19 @@ async def require_key(request: Request):
     if request.method == "OPTIONS":
         return None
 
+    # ★ 管理员密钥走**单独一条路**，不并进下面的 keys 字典。
+    #   两个理由：① 它不参与名字校验/查重（那套规则是给"数据分区"设计的，
+    #   管理员不落任何分区），也就不会多出一类"名字被丢弃"的坑；
+    #   ② 它不可能被某个体验者的条目顶掉。比对同样用常数时间。
+    #
+    #   位置很关键：必须在下面 `if not keys:` **之前**。否则"只配了管理员密钥、
+    #   又对外监听"时 keys 为空 → 主人自己也会被 503 挡在门外，很难想明白。
+    provided = request.headers.get("X-API-Key", "")
+    if config.API_ADMIN_KEY and hmac.compare_digest(
+            provided.encode(), config.API_ADMIN_KEY.encode()):
+        _current_caller.set(ADMIN_CALLER)
+        return None
+
     keys = _load_keys()
 
     if not keys:
@@ -373,7 +445,6 @@ async def require_key(request: Request):
                        "请在 .env 设置 API_AUTH_KEY（并在插件设置里填入相同的值）；"
                        "若只想本机使用，把 HOST 改回 127.0.0.1。")
 
-    provided = request.headers.get("X-API-Key", "")
     caller = _match_caller(provided, keys)
     if not caller:
         return _reject(request, 401, "无效的 API Key（请在插件的「设置 → 访问密钥」里填写）")
